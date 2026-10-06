@@ -20,8 +20,6 @@ function findKimiConfigPath(customPath) {
     path.join(homedir, ".kimi-code", "config.toml"),
     path.join(homedir, ".kimi", "config.toml"),
     path.join(homedir, ".config", "kimi-code", "config.toml"),
-    "D:\\ProgramData\\.kimi-code\\config.toml",
-    "C:\\ProgramData\\.kimi-code\\config.toml",
   ];
 
   for (const candidate of candidates) {
@@ -38,7 +36,7 @@ function findKimiConfigPath(customPath) {
 }
 
 /**
- * 轻量且健壮的 TOML 解析器
+ * 解析模型配置用到的 TOML 单行标量与表，不支持多行字符串和内联表
  */
 function parseToml(content) {
   const result = {
@@ -49,13 +47,23 @@ function parseToml(content) {
 
   const lines = content.split(/\r?\n/);
   for (let line of lines) {
+    let quote = null;
+    let escaped = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (escaped) { escaped = false; continue; }
+      if (quote === '"' && char === "\\") { escaped = true; continue; }
+      if (quote) { if (char === quote) quote = null; }
+      else if (char === '"' || char === "'") quote = char;
+      else if (char === "#") { line = line.slice(0, i); break; }
+    }
     line = line.trim();
     if (!line || line.startsWith("#")) continue;
 
     // 匹配类似 [models."Local/gemini-3.8-flash-tiered"] 或 [thinking]
-    const sectionMatch = line.match(/^\[([A-Za-z0-9_.\-:\"\'\/]+)\]$/);
+    const sectionMatch = line.match(/^\[([^\[\]]+)\]$/);
     if (sectionMatch) {
-      currentSection = sectionMatch[1];
+      currentSection = sectionMatch[1].trim();
       result.sections[currentSection] = {};
       continue;
     }
@@ -71,7 +79,12 @@ function parseToml(content) {
         (val.startsWith('"') && val.endsWith('"')) ||
         (val.startsWith("'") && val.endsWith("'"))
       ) {
-        val = val.slice(1, -1);
+        if (val.startsWith('"')) {
+          try { val = JSON.parse(val); }
+          catch (err) { throw new Error(`不支持的 TOML 字符串: ${key}`); }
+        } else {
+          val = val.slice(1, -1);
+        }
       } else if (val === "true") {
         val = true;
       } else if (val === "false") {
@@ -94,7 +107,7 @@ function parseToml(content) {
 /**
  * 解析出用于自动重命名的模型与连接配置
  */
-function resolveRenameModelInfo(configPath) {
+function resolveRenameModelInfo(configPath, overrideModelId) {
   if (!fs.existsSync(configPath)) {
     throw new Error(`Kimi 配置文件不存在: ${configPath}`);
   }
@@ -103,17 +116,18 @@ function resolveRenameModelInfo(configPath) {
   const parsed = parseToml(content);
 
   // 1. 获取目标模型 ID：优先 rename_model，未配置则默认 default_model
-  const explicitRenameModel = parsed.root["rename_model"];
+  const explicitRenameModel = overrideModelId || parsed.root["rename_model"];
   const defaultModel = parsed.root["default_model"];
   const targetModelId = explicitRenameModel || defaultModel;
 
-  if (!targetModelId) {
+  if (!targetModelId || typeof targetModelId !== "string") {
     throw new Error("在 config.toml 中既未找到 rename_model 也未找到 default_model");
   }
 
   // 2. 匹配 [models."<targetModelId>"]
   let modelEntry = null;
   for (const [secName, secData] of Object.entries(parsed.sections)) {
+    if (!secName.startsWith("models.")) continue;
     const cleanSec = secName
       .replace(/^models\./, "")
       .replace(/^["']|["']$/g, "");
@@ -123,11 +137,14 @@ function resolveRenameModelInfo(configPath) {
     }
   }
 
+  if (!modelEntry) throw new Error(`未找到模型配置: ${targetModelId}`);
+
   // 3. 匹配对应的 Provider
   const providerName = modelEntry ? modelEntry.provider : null;
   let providerEntry = null;
   if (providerName) {
     for (const [secName, secData] of Object.entries(parsed.sections)) {
+      if (!secName.startsWith("providers.")) continue;
       const cleanSec = secName
         .replace(/^providers\./, "")
         .replace(/^["']|["']$/g, "");
@@ -136,6 +153,13 @@ function resolveRenameModelInfo(configPath) {
         break;
       }
     }
+  }
+
+  if (!providerEntry) {
+    throw new Error(`未找到供应商配置: ${providerName || "未指定"}，托管登录认证暂不支持，请配置 OpenAI 兼容供应商`);
+  }
+  if (providerEntry.type && !["openai", "openai_legacy"].includes(providerEntry.type)) {
+    throw new Error(`不支持的供应商类型: ${providerEntry.type}，目前仅支持 OpenAI Chat Completions 兼容接口`);
   }
 
   // 4. 组装实际调用的模型名与 Endpoint
@@ -150,11 +174,13 @@ function resolveRenameModelInfo(configPath) {
       endpoint = `${baseUrl}/chat/completions`;
     }
   } else {
-    // 若未配置，默认走官方 coding 接口
-    endpoint = "https://api.kimi.com/coding/v1/chat/completions";
+    throw new Error(`供应商 ${providerName} 缺少 base_url`);
   }
 
-  const apiKey = (providerEntry && providerEntry.api_key) || "";
+  const apiKey = providerEntry.api_key || (providerEntry.api_key_env && process.env[providerEntry.api_key_env]) || "";
+  if (typeof apiKey !== "string" || !apiKey.trim()) {
+    throw new Error(`供应商 ${providerName} 缺少 api_key 或 api_key_env 对应的环境变量`);
+  }
   const providerType = (providerEntry && providerEntry.type) || "openai";
 
   return {
@@ -203,29 +229,38 @@ function setRenameModelInConfig(configPath, newModelId) {
     throw new Error(`配置文件不存在: ${configPath}`);
   }
 
-  let content = fs.readFileSync(configPath, "utf8");
+  if (typeof newModelId !== "string" || !listAvailableModels(configPath).some((model) => model.id === newModelId)) {
+    throw new Error(`模型 ID 不在配置中: ${newModelId}`);
+  }
+  resolveRenameModelInfo(configPath, newModelId);
+  const original = fs.readFileSync(configPath, "utf8");
+  const firstSection = original.search(/^[ \t]*\[/m);
+  const suffix = firstSection === -1 ? "" : original.slice(firstSection);
+  let content = firstSection === -1 ? original : original.slice(0, firstSection);
+  const newline = original.includes("\r\n") ? "\r\n" : "\n";
+  const modelValue = JSON.stringify(newModelId);
   const renameModelRegex = /^[ \t]*rename_model[ \t]*=[ \t]*["'][^"']*["']/m;
 
   if (renameModelRegex.test(content)) {
     // 替换已有配置
     content = content.replace(
       renameModelRegex,
-      `rename_model = "${newModelId}"`
+      () => `rename_model = ${modelValue}`
     );
   } else {
     // 在 default_model 附近追加，或者在顶部追加
-    const defaultModelRegex = /^([ \t]*default_model[ \t]*=[ \t]*["'][^"']*["'])/m;
+    const defaultModelRegex = /^([ \t]*default_model[ \t]*=[^\r\n]*)/m;
     if (defaultModelRegex.test(content)) {
       content = content.replace(
         defaultModelRegex,
-        `$1\n\n# 自动会话重命名模型 (kimi-web-renamer-patch)\nrename_model = "${newModelId}"`
+        (line) => `${line}${newline}${newline}# 自动会话重命名模型 (kimi-web-renamer-patch)${newline}rename_model = ${modelValue}`
       );
     } else {
-      content = `# 自动会话重命名模型 (kimi-web-renamer-patch)\nrename_model = "${newModelId}"\n\n` + content;
+      content = `# 自动会话重命名模型 (kimi-web-renamer-patch)${newline}rename_model = ${modelValue}${newline}${newline}` + content;
     }
   }
 
-  fs.writeFileSync(configPath, content, "utf8");
+  fs.writeFileSync(configPath, content + suffix, "utf8");
   return true;
 }
 

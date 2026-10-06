@@ -11,7 +11,7 @@
     "unpatch": "node bin/cli.js unpatch",
     "status": "node bin/cli.js status",
     "models": "node bin/cli.js models",
-    "test": "node test/test-mock.js && node test/test-config.js"
+    "test": "node test/test-mock.js && node test/test-config.js && node test/test-regressions.js"
   },
   "keywords": [
     "kimi",
@@ -21,6 +21,13 @@
     "ai",
     "config.toml"
   ],
-  "author": "",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zluoshui/kimi-web-renamer-patch.git"
+  },
+  "author": "zluoshui",
   "license": "MIT"
 }

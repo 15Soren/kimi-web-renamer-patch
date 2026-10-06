@@ -1,161 +1,111 @@
-# Kimi Code Web 自动重命名补丁工具 (kimi-web-renamer-patch)
+# Kimi Code Web 会话重命名补丁
 
-[![Node.js Version](https://img.shields.io/badge/Node.js-%3E%3D16.0.0-green.svg)](https://nodejs.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/)
-  
-> 一键将 AI 对话自动命名功能直接 Patch（打补丁）注入到原生 Kimi Code Web 界面中。  
-> **完全复用 Kimi Code 自身的 `config.toml` 配置文件**，默认使用 `default_model`，并支持指定专属的 `rename_model`。
+为 Kimi Code Web 的会话标题栏添加重命名图标，点击后根据会话消息生成标题并写回。复用 `config.toml` 中的模型与供应商配置，默认选择 `default_model`，也可以指定 `rename_model`。
 
----
+这是第三方补丁工具，与 Moonshot AI 无关联。修改的是本机安装文件，升级 Kimi Code 后需要重新应用。
 
-## 🌟 核心特性
+## 支持范围
 
-- **零独立供应商配置**：完全不需要单独配置 API Key 或 Endpoint，直接读取并复用 Kimi Code 原生的 `config.toml`！
-- **开箱即用，默认继承**：Patch 时默认使用你当前在 Kimi 里设置的 `default_model`；
-- **专属重命名模型**：支持在 `config.toml` 中添加 `rename_model` 参数（例如换成速度极快、成本极低的轻量 Flash 模型）；
-- **全平台多设备生效**：打完补丁后，Chrome、Edge、Safari、Firefox 乃至手机平板局域网访问，页面均自带rename按钮
-- **CSP 自动放行**：精准修改服务端 `Content-Security-Policy`，放行 `connect-src`，解决浏览器前端直连模型的跨域拦截；
-- **无损备份与一键还原**：修改前自动将官方文件备份为 `.bak`，随时支持一键 `unpatch` 瞬间还原官方纯净版。
+- 补丁工具需要 Node.js 18 或以上；被补丁的 Web 服务运行环境也需要内置 `fetch` 和 `AbortSignal.timeout`。
+- 自动查找 npm 全局安装目录、可执行文件路径及常见安装位置；支持 `--path` 手动指定目录。
+- 默认查找 `~/.kimi-code/config.toml`、`~/.kimi/config.toml` 和 `~/.config/kimi-code/config.toml`，支持 `--config`。
+- 仅支持提供 `base_url` 和 `api_key`（或 `api_key_env`）的 OpenAI Chat Completions 兼容供应商。托管 OAuth 登录、Anthropic、Responses 等接口暂不支持。
+- 配置解析支持单行字符串、布尔值、数字、表、行尾注释及 Unicode 名称；不是完整 TOML 解析器，多行字符串、内联表等语法不在支持范围内。
+- 安装目录必须包含 `dist/main.mjs` 和 `dist-web/index.html`；服务端必须包含 `registerConfigRoutes(apiV1, core);`。不满足时会在写入前报错。
+- 前端依赖现有 Kimi Web 的会话路径、页面选择器和 API；没有覆盖所有 Kimi Code 版本。跨平台测试验证的是补丁工具与模拟文件，不代表所有浏览器和上游版本都已实测。
 
----
-
-## 📦 目录结构
-
-```text
-kimi-web-renamer-patch/
-├── bin/
-│   └── cli.js               # CLI 命令行入口
-├── src/
-│   ├── patcher.js           # 备份、Patch、还原核心逻辑
-│   ├── kimi-config.js       # 自动解析 Kimi config.toml 模型与供应商
-│   └── template/
-│       └── kimi-renamer.js  # 注入到页面的原生重命名脚本模板
-├── test/
-│   ├── test-mock.js         # Patch 与还原流程自动化测试
-│   └── test-config.js       # config.toml 解析测试
-├── package.json             # 项目元信息与快捷脚本
-├── LICENSE                  # MIT 协议
-└── README.md                # 使用说明文档
-```
-
----
-
-## ⚡ 快速上手
-
-### 1. 克隆仓库
+## 快速使用
 
 ```bash
-git clone https://github.com/your-username/kimi-web-renamer-patch.git
+git clone https://github.com/zluoshui/kimi-web-renamer-patch.git
 cd kimi-web-renamer-patch
-```
-
-### 2. 检查当前模型与状态
-
-```bash
 node bin/cli.js models
-```
-
-控制台将自动找到你的 `config.toml`，并列出所有已配置的模型：
-
-```text
-📋 当前 Kimi Code 中已配置的模型列表 (共 7 个):
-   • kimi-code/kimi-for-coding (K2.7 Coding) - Provider: managed:kimi-code
-   • kimi-code/k3 (K3) - Provider: managed:kimi-code
-   • Local/gemini-3.8-flash-tiered (Gemini 3.8 Flash) - Provider: Local [当前生效: default_model]
-   • Local/gemini-3.5-flash-lite (Gemini 3.5 Flash Lite) - Provider: Local
-   ...
-```
-
-### 3. 一键应用补丁
-
-```bash
-node bin/cli.js
-# 或
 node bin/cli.js patch
 ```
 
-> 💡 **提示**：补丁默认会使用你在 Kimi 里设定的 `default_model`。系统将自动解析其所属的 Provider、Endpoint 和认证参数并完成注入。
+没有第三方运行依赖，无需 `npm install`。应用后重启 `kimi web`，刷新页面，在会话标题栏点击重命名图标。
 
-### 4. 启动与体验
-
-启动 Kimi Code Web 服务：
+手动指定路径：
 
 ```bash
-kimi web
+node bin/cli.js patch --path "/path/to/node_modules/@moonshot-ai/kimi-code" --config "/path/to/config.toml"
 ```
 
-在浏览器打开 Kimi Web 界面，进入任意对话会话，右下角将常驻精致的 **「✨ 重命名」** 悬浮按钮，点击即可秒级提炼并写回精简标题！
+## 模型配置
 
----
-
-## ⚙️ 模型自定义配置 (`rename_model`)
-
-如果你希望使用与默认对话不同的模型来执行重命名（例如使用响应极快的轻量模型）：
-
-### 方式 A：命令行一键切换（推荐）
-
-```bash
-node bin/cli.js set-model "Local/gemini-3.5-flash-lite"
-```
-
-该命令会自动向你的 `config.toml` 写入/更新 `rename_model` 并自动重新编译应用补丁！
-
-### 方式 B：手动编辑 `config.toml`
-
-打开 Kimi Code 的配置文件（通常位于 `~/.kimi-code/config.toml`），在顶层添加 `rename_model`：
+以下模型名和域名仅为示例，请替换为实际可用的服务：
 
 ```toml
-default_permission_mode = "yolo"
-default_model = "Local/gemini-3.8-flash-tiered"
+default_model = "Example/chat-model"
+rename_model = "Example/title-model"
 
-# 专属的重命名模型（若不配置则默认等于 default_model）
-rename_model = "Local/gemini-3.5-flash-lite"
+[models."Example/chat-model"]
+provider = "Example"
+model = "chat-model"
 
-[models."Local/gemini-3.5-flash-lite"]
-provider = "Local"
-model = "gemini-3.5-flash-lite"
-# ...
+[models."Example/title-model"]
+provider = "Example"
+model = "title-model"
+
+[providers.Example]
+type = "openai"
+base_url = "https://model.example/v1"
+api_key_env = "EXAMPLE_MODEL_API_KEY"
 ```
 
-保存后，只需重新执行一次 `node bin/cli.js patch` 即可生效。
+运行补丁时，对应环境变量必须已设置。也支持供应商的 `api_key` 字段。密钥在应用补丁时写入本机服务端文件，因此更换密钥、模型或端点后需要重新应用补丁并重启服务。
 
----
+切换模型：
 
-## 🛠️ CLI 常用命令
-
-| 命令 | 说明 | 示例 |
-| :--- | :--- | :--- |
-| `node bin/cli.js patch` | 自动从 `config.toml` 读取模型并应用补丁（默认命令） | `node bin/cli.js` |
-| `node bin/cli.js models` | 查看 Kimi 中所有已配置的模型及当前生效模型 | `node bin/cli.js models` |
-| `node bin/cli.js set-model <ID>` | 切换指定的重命名模型，更新 `config.toml` 并自动重新打补丁 | `node bin/cli.js set-model "Local/gemini-3.5-flash-lite"` |
-| `node bin/cli.js unpatch` | 彻底还原为官方原版，撤销所有修改并清理注入脚本 | `node bin/cli.js unpatch` |
-| `node bin/cli.js status` | 检查当前补丁状态与绑定的模型信息 | `node bin/cli.js status` |
-| `--path <dir>` | 手动指定 `kimi-code` 安装根目录 | `node bin/cli.js patch --path "/path/to/kimi-code"` |
-| `--config <path>` | 手动指定 `config.toml` 路径 | `node bin/cli.js patch --config "/path/to/config.toml"` |
-
----
-
-## 📌 注意事项与常见问题
-
-### 1. 运行时的权限提示 (EPERM / EACCES)
-如果你的 Node.js 或全局 npm 包安装在受系统保护的目录下（例如 Windows 的 `C:\Program Files`）：
-- 请在 Windows 下**右键以管理员身份运行**打开 PowerShell / CMD 终端再执行 `node bin/cli.js patch`；
-- Linux / macOS 用户请在命令前加上 `sudo`。
-
-### 2. 为什么之前直接请求会报 `failed to fetch`？
-许多本地大模型代理（如 GPT-Load、本地网关等）默认未配置 CORS 跨源支持，对浏览器的跨域 `OPTIONS` 预检请求返回了 `405 Method Not Allowed`，导致浏览器直接拦截阻断。  
-**本工具的解决方案**：在 Kimi Code 本地 Node.js 服务端注入同源代理路由 `/api/v1/custom-renamer/generate`，网页前端请求同源接口不触发 OPTIONS 预检，后端直连模型服务，彻底绕过 CORS 与网络拦截问题！
-
-### 3. Kimi Code 升级后如何处理？
-当你通过 `npm update -g @moonshot-ai/kimi-code` 升级 Kimi Code 时，官方安装包会被覆盖。此时无需惊慌，只需回到该项目重新运行一次：
 ```bash
-node bin/cli.js patch
+node bin/cli.js set-model "Example/title-model"
 ```
-即可瞬间重新激活功能！
 
----
+此命令验证模型后更新顶层 `rename_model`，随后应用补丁；应用失败时还原原配置。手动修改配置后执行 `patch` 也可以。
 
-## 📄 开源协议
+## 命令
 
-本项目基于 [MIT](LICENSE) 协议开源。
+| 命令 | 用途 |
+| --- | --- |
+| `patch`（默认） | 解析模型配置并应用补丁 |
+| `models` / `list-models` | 列出配置中的模型，不要求找到安装目录 |
+| `set-model <ID>` | 更新重命名模型并应用补丁 |
+| `status` | 检查前端与代理路由状态，无需配置文件；传入 `--config` 可查看模型 |
+| `unpatch` / `restore` | 还原原文件并删除补丁资源，无需配置文件 |
+| `--path <dir>` | 指定 Kimi Code 安装根目录 |
+| `--config <file>` | 指定配置文件 |
+| `--help` | 显示帮助 |
+
+例如：`node bin/cli.js unpatch --path "/path/to/kimi-code"`。
+
+## 凭证与访问边界
+
+网页仅向同源 `/api/v1/custom-renamer/generate` 发送消息。模型端点和 API Key 固定在服务端，不会写入浏览器脚本；客户端不能修改代理目标。请求不跟随重定向，超时为 30 秒，失败时不会回退为浏览器直连，也不会把 Web 连接凭证作为模型 API Key。
+
+补丁保留原有 CSP。路由注册在 Kimi 原有 `apiV1` 下，依赖宿主的认证与访问控制。请保护安装目录与服务端文件，不要将补丁后的安装文件或真实配置提交到公共仓库。能够访问此 Web 服务的授权用户会使用配置的模型额度，消息内容会发送给该供应商。部署到公网前需要自行验证宿主认证及访问限制。
+
+同源请求解决网页跨端口调用模型网关时的 CORS 预检问题，仍受宿主 CSP、认证和实际网络状态影响。请求不传 `reasoning_effort`、`thinking` 或 `effort`；这表示使用供应商的默认行为，不保证关闭思考或降低延迟。响应会剥离完整的 `<think>...</think>` 标签，标题长度由提示词约束，尚未实施严格的 4–12 字校验。
+
+宽屏按钮挂载在正文 `.chat-header`，排除 `.sa-head`；窄屏使用 `.topbar`。旧按钮清理只依据本补丁专属 ID 与类名，不按“重命名”文本删除其他按钮。
+
+## 备份、升级与还原
+
+修改前创建 `index.html.renamer.bak` 和 `main.mjs.renamer.bak`，重复应用会更新代理配置并保留原文件备份。新版本原文件覆盖安装后，重新应用时会刷新相应备份。
+
+建议升级前先 `unpatch`，升级后再 `patch`，并重启服务。保留备份才能逐字恢复原文件；备份缺失时，新版补丁可以移除自身脚本、路由和资源，但不保证原始排版。旧版无结束标记的路由需要原版备份才能安全还原。
+
+本补丁使用独立的 `kimi-renamer.ico`，不会覆盖或删除安装目录原有的 `Kimi.ico`。如果遇到 `EPERM` / `EACCES`，优先使用当前账户有写权限的安装目录；修改受保护目录时需由你自行处理权限。
+
+## 验证
+
+```bash
+npm test
+```
+
+测试使用独立临时目录和模拟配置，不读取本机真实模型配置、不调用真实模型服务，也不修改真实 Kimi 安装。覆盖配置解析、补丁与备份还原、重复应用、不兼容版本拒绝、密钥隔离、固定代理目标、超时设置、原图标保护和 CLI 参数处理。
+
+GitHub Actions 在 Windows、macOS、Linux 与 Node.js 18、22、24 上运行这些测试。浏览器页面及真实供应商端到端兼容性需要在目标 Kimi Code 版本中另外验证。
+
+## 协议
+
+代码采用 [MIT](LICENSE) 协议。Kimi 名称与图标涉及其各自权利方，本项目的代码许可不授予第三方商标权。

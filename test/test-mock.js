@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const assert = require("assert");
+const os = require("os");
 const {
   isValidKimiDir,
   checkStatus,
@@ -10,12 +11,10 @@ const {
 
 console.log("🧪 正在运行 Patch 逻辑自动化测试套件 (适配 config.toml)...\n");
 
-const tempDir = path.join(__dirname, "mock-kimi-code");
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-renamer-test-"));
 
 // 准备测试环境
-if (fs.existsSync(tempDir)) {
-  fs.rmSync(tempDir, { recursive: true, force: true });
-}
+try {
 
 fs.mkdirSync(path.join(tempDir, "dist"), { recursive: true });
 fs.mkdirSync(path.join(tempDir, "dist-web"), { recursive: true });
@@ -79,10 +78,11 @@ const patchedStatus = checkStatus(tempDir);
 assert.strictEqual(patchedStatus.isFullyPatched, true);
 assert.strictEqual(patchedStatus.isRenamerJsPresent, true);
 assert.strictEqual(patchedStatus.isHtmlPatched, true);
-assert.strictEqual(patchedStatus.isCspPatched, true);
+assert.strictEqual(patchedStatus.isCspPatched, false);
+assert.strictEqual(patchedStatus.isProxyPatched, true);
 
 const renamerJsContent = fs.readFileSync(path.join(tempDir, "dist-web", "kimi-renamer.js"), "utf8");
-assert.ok(renamerJsContent.includes("mock-api-key-xyz"), "必须正确注入 config.toml 中的 apiKey");
+assert.ok(!renamerJsContent.includes("mock-api-key-xyz"), "前端不能包含模型密钥");
 assert.ok(renamerJsContent.includes("test-real-model-name"), "必须正确注入真实的 model 名称");
 console.log("✅ 3. Patch 应用与 config.toml 动态解析校验通过");
 
@@ -97,5 +97,7 @@ assert.strictEqual(restoredHtml.trim(), initialHtml.trim());
 console.log("✅ 4. 一键还原 Restore 校验通过");
 
 // 清理测试目录
-fs.rmSync(tempDir, { recursive: true, force: true });
 console.log("\n🎉 所有测试均已顺利通过！Patcher 与 config.toml 联动 100% 稳健！\n");
+} finally {
+  fs.rmSync(tempDir, { recursive: true, force: true });
+}

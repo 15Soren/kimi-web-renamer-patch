@@ -14,14 +14,23 @@ const CSP_SEARCH_PATTERN = 'CONTENT_SECURITY_POLICY = "default-src \'self\';';
 const CSP_REPLACE_TARGET = 'CONTENT_SECURITY_POLICY = "default-src \'self\'; connect-src * \'self\' data: blob:;';
 const ROUTE_HOOK_TARGET = 'registerConfigRoutes(apiV1, core);';
 const BACKEND_ROUTE_MARKER = '/* __KIMI_RENAMER_PROXY_ROUTE__ */';
+const BACKEND_ROUTE_END = '/* __KIMI_RENAMER_PROXY_ROUTE_END__ */';
 const BACKEND_ROUTE_CODE = `
 	/* __KIMI_RENAMER_PROXY_ROUTE__ */
-	apiV1.post("/custom-renamer/generate", async (req, reply) => {
-		try {
-			const { prompt, model, endpoint, apiKey, systemPrompt } = req.body || {};
-			const authHeader = apiKey ? (apiKey.startsWith("Bearer ") ? apiKey : \`Bearer \${apiKey}\`) : req.headers["authorization"];
-			const fetchRes = await fetch(endpoint, {
-				method: "POST",
+	{
+		const renameConfig = __SERVER_CONFIG_PLACEHOLDER__;
+		apiV1.post("/custom-renamer/generate", async (req, reply) => {
+			try {
+				const { prompt } = req.body || {};
+				if (typeof prompt !== "string" || !prompt.trim()) {
+					return reply.code(400).send({ error: "prompt 必须为非空字符串" });
+				}
+				const { model, endpoint, apiKey, systemPrompt } = renameConfig;
+				const authHeader = apiKey.startsWith("Bearer ") ? apiKey : \`Bearer \${apiKey}\`;
+				const fetchRes = await fetch(endpoint, {
+					method: "POST",
+					redirect: "error",
+					signal: AbortSignal.timeout(30000),
 				headers: {
 					"Content-Type": "application/json",
 					...(authHeader ? { "Authorization": authHeader } : {})
@@ -37,8 +46,7 @@ const BACKEND_ROUTE_CODE = `
 				})
 			});
 			if (!fetchRes.ok) {
-				const errText = await fetchRes.text();
-				return reply.code(fetchRes.status).send({ error: \`大模型接口响应异常 (\${fetchRes.status}): \${errText.slice(0, 150)}\` });
+					return reply.code(502).send({ error: \`大模型接口响应异常 (\${fetchRes.status})\` });
 			}
 			const data = await fetchRes.json();
 			let rawContent = data?.choices?.[0]?.message?.content || "";
@@ -47,9 +55,22 @@ const BACKEND_ROUTE_CODE = `
 			if (!title) return reply.code(500).send({ error: "大模型返回了空标题" });
 			reply.send({ code: 0, title });
 		} catch (err) {
-			reply.code(500).send({ error: err.message });
-		}
-	});`;
+				reply.code(502).send({ error: "模型请求失败，请检查服务端模型配置与网络" });
+			}
+		});
+	}
+	/* __KIMI_RENAMER_PROXY_ROUTE_END__ */`;
+
+function removeBackendRoute(content) {
+  const start = content.indexOf(BACKEND_ROUTE_MARKER);
+  if (start === -1) return content;
+  const endMarker = `\n\t${BACKEND_ROUTE_END}`;
+  const end = content.indexOf(endMarker, start);
+  if (end === -1) {
+    throw new Error("检测到旧版或不完整的代理补丁，请先使用原版备份还原后重新应用");
+  }
+  return content.slice(0, start) + content.slice(end + endMarker.length);
+}
 
 /**
  * 跨平台智能查找 kimi-code 安装路径
@@ -98,7 +119,6 @@ function findKimiCodePath(customPath) {
   const commonCandidates = [
     // Windows 常见位置
     path.join(process.env.APPDATA || "", "npm", "node_modules", "@moonshot-ai", "kimi-code"),
-    "D:\\Programs\\nodejs\\node_global\\node_modules\\@moonshot-ai\\kimi-code",
     "C:\\Program Files\\nodejs\\node_modules\\@moonshot-ai\\kimi-code",
     // macOS / Linux 常见位置
     "/usr/local/lib/node_modules/@moonshot-ai/kimi-code",
@@ -141,14 +161,16 @@ function checkStatus(kimiDir) {
 
   const mainContent = fs.existsSync(mainMjs) ? fs.readFileSync(mainMjs, "utf8") : "";
   const isCspPatched = mainContent.includes("connect-src * 'self'");
+  const isProxyPatched = mainContent.includes(BACKEND_ROUTE_MARKER) && mainContent.includes(BACKEND_ROUTE_END);
 
   const hasBackup = fs.existsSync(htmlBak) && fs.existsSync(mainBak);
 
   return {
-    isFullyPatched: isRenamerJsPresent && isHtmlPatched && isCspPatched,
+    isFullyPatched: isRenamerJsPresent && isHtmlPatched && isProxyPatched,
     isRenamerJsPresent,
     isHtmlPatched,
     isCspPatched,
+    isProxyPatched,
     hasBackup,
   };
 }
@@ -177,15 +199,43 @@ function applyPatch(kimiDir, options = {}) {
     modelInfo = resolveRenameModelInfo(configPath);
   }
 
+  if (!isValidKimiDir(kimiDir)) throw new Error("目标目录缺少 Kimi Code Web 核心文件");
+  const endpoint = new URL(modelInfo.endpoint);
+  if (!["http:", "https:"].includes(endpoint.protocol) || endpoint.username || endpoint.password) {
+    throw new Error("模型 Endpoint 必须为不含账户信息的 HTTP(S) 地址");
+  }
+  if (typeof modelInfo.apiKey !== "string" || !modelInfo.apiKey.trim()) {
+    throw new Error("重命名模型需要显式 api_key 或 api_key_env，不能使用 Web 会话凭证调用模型");
+  }
+  let htmlContent = fs.readFileSync(indexHtml, "utf8");
+  let mainContent = fs.readFileSync(mainMjs, "utf8");
+  if ((!fs.existsSync(htmlBak) && htmlContent.includes(SCRIPT_INJECTION)) ||
+      (!fs.existsSync(mainBak) && mainContent.includes(BACKEND_ROUTE_MARKER))) {
+    throw new Error("已安装补丁但缺少原版备份，请先 unpatch 再重新应用");
+  }
+  if (!htmlContent.includes(SCRIPT_INJECTION) && !htmlContent.includes("</head>")) {
+    throw new Error("不兼容的 index.html：缺少脚本注入位置");
+  }
+  if (!mainContent.includes(ROUTE_HOOK_TARGET)) {
+    throw new Error("不兼容的 Kimi Code 版本：未找到后端路由注入位置");
+  }
+  mainContent = removeBackendRoute(mainContent).replace(CSP_REPLACE_TARGET, CSP_SEARCH_PATTERN);
+  const serverConfig = JSON.stringify({
+    endpoint: endpoint.href,
+    apiKey: modelInfo.apiKey,
+    model: modelInfo.actualModel || modelInfo.model,
+    systemPrompt: modelInfo.systemPrompt,
+  });
+  const routeCode = BACKEND_ROUTE_CODE.replace("__SERVER_CONFIG_PLACEHOLDER__", () => serverConfig);
+  const patchedMain = mainContent.replace(ROUTE_HOOK_TARGET, () => `${ROUTE_HOOK_TARGET}\n${routeCode}`);
+
   // 1. 生成并写入 dist-web/kimi-renamer.js
   const templatePath = path.join(__dirname, "template", "kimi-renamer.js");
   const templateContent = fs.readFileSync(templatePath, "utf8");
   const finalScriptContent = templateContent.replace(
     "__CONFIG_PLACEHOLDER__",
-    JSON.stringify(
+    () => JSON.stringify(
       {
-        endpoint: modelInfo.endpoint,
-        apiKey: modelInfo.apiKey || "",
         model: modelInfo.actualModel || modelInfo.model,
         systemPrompt: modelInfo.systemPrompt,
         temperature: modelInfo.temperature ?? 0.2,
@@ -195,21 +245,23 @@ function applyPatch(kimiDir, options = {}) {
       2
     )
   );
+  if (!fs.existsSync(htmlBak) || (!htmlContent.includes(SCRIPT_INJECTION) && fs.readFileSync(htmlBak, "utf8") !== htmlContent)) {
+    fs.writeFileSync(htmlBak, htmlContent, "utf8");
+  }
+  const originalMain = fs.readFileSync(mainMjs, "utf8");
+  if (!fs.existsSync(mainBak) || (!originalMain.includes(BACKEND_ROUTE_MARKER) && fs.readFileSync(mainBak, "utf8") !== originalMain)) {
+    fs.writeFileSync(mainBak, originalMain, "utf8");
+  }
   fs.writeFileSync(renamerJs, finalScriptContent, "utf8");
 
   // 复制 Kimi.ico 图标到 dist-web
   const iconSource = path.join(__dirname, "assets", "Kimi.ico");
-  const iconTarget = path.join(distWebDir, "Kimi.ico");
+  const iconTarget = path.join(distWebDir, "kimi-renamer.ico");
   if (fs.existsSync(iconSource)) {
     fs.copyFileSync(iconSource, iconTarget);
   }
 
   // 2. 备份与修改 dist-web/index.html
-  let htmlContent = fs.readFileSync(indexHtml, "utf8");
-  if (!fs.existsSync(htmlBak)) {
-    fs.writeFileSync(htmlBak, htmlContent, "utf8");
-  }
-
   if (!htmlContent.includes(SCRIPT_INJECTION)) {
     // 注入在 <script src="/boot.js"></script> 之后
     if (htmlContent.includes('<script src="/boot.js"></script>')) {
@@ -224,35 +276,8 @@ function applyPatch(kimiDir, options = {}) {
     fs.writeFileSync(indexHtml, htmlContent, "utf8");
   }
 
-  // 3. 备份与修改 dist/main.mjs (解除 CSP 限制并注入服务端代理路由)
-  let mainContent = fs.readFileSync(mainMjs, "utf8");
-  if (!fs.existsSync(mainBak)) {
-    fs.writeFileSync(mainBak, mainContent, "utf8");
-  }
-
-  let mainChanged = false;
-  if (!mainContent.includes("connect-src * 'self'")) {
-    if (mainContent.includes(CSP_SEARCH_PATTERN)) {
-      mainContent = mainContent.replace(CSP_SEARCH_PATTERN, CSP_REPLACE_TARGET);
-      mainChanged = true;
-    } else {
-      console.warn("⚠️  未能自动定位 main.mjs 中的 CSP 原始指令，请确认版本是否适配");
-    }
-  }
-
-  if (!mainContent.includes(BACKEND_ROUTE_MARKER)) {
-    if (mainContent.includes(ROUTE_HOOK_TARGET)) {
-      mainContent = mainContent.replace(
-        ROUTE_HOOK_TARGET,
-        `${ROUTE_HOOK_TARGET}\n${BACKEND_ROUTE_CODE}`
-      );
-      mainChanged = true;
-    }
-  }
-
-  if (mainChanged) {
-    fs.writeFileSync(mainMjs, mainContent, "utf8");
-  }
+  // 3. 备份与修改 dist/main.mjs (保留 CSP 并注入固定目标代理路由)
+  fs.writeFileSync(mainMjs, patchedMain, "utf8");
 
   return { success: true, modelInfo };
 }
@@ -266,11 +291,15 @@ function restorePatch(kimiDir) {
   const indexHtml = path.join(distWebDir, "index.html");
   const mainMjs = path.join(distDir, "main.mjs");
   const renamerJs = path.join(distWebDir, "kimi-renamer.js");
-  const renamerIco = path.join(distWebDir, "Kimi.ico");
+  const renamerIco = path.join(distWebDir, "kimi-renamer.ico");
   const htmlBak = path.join(distWebDir, "index.html.renamer.bak");
   const mainBak = path.join(distDir, "main.mjs.renamer.bak");
 
   let restoredAny = false;
+
+  if (!fs.existsSync(mainBak) && fs.existsSync(mainMjs)) {
+    removeBackendRoute(fs.readFileSync(mainMjs, "utf8"));
+  }
 
   // 1. 还原 index.html
   if (fs.existsSync(htmlBak)) {
@@ -282,7 +311,7 @@ function restorePatch(kimiDir) {
     if (fs.existsSync(indexHtml)) {
       let content = fs.readFileSync(indexHtml, "utf8");
       if (content.includes(SCRIPT_INJECTION)) {
-        content = content.replace(new RegExp(`\\r?\\n?\\s*${SCRIPT_INJECTION}`, "g"), "");
+        content = content.replace(SCRIPT_INJECTION, "");
         fs.writeFileSync(indexHtml, content, "utf8");
         restoredAny = true;
       }
@@ -303,7 +332,7 @@ function restorePatch(kimiDir) {
         restoredAny = true;
       }
       if (content.includes(BACKEND_ROUTE_MARKER)) {
-        content = content.replace(new RegExp(`\\r?\\n?\\s*${BACKEND_ROUTE_CODE}`, "g"), "");
+        content = removeBackendRoute(content);
         restoredAny = true;
       }
       fs.writeFileSync(mainMjs, content, "utf8");

@@ -15,20 +15,27 @@ const {
 
 // 命令行参数解析
 const args = process.argv.slice(2);
-const command = args[0] && !args[0].startsWith("-") ? args[0].toLowerCase() : "patch";
-
-// 解析自定义参数
+const positional = [];
 let customPath = null;
-const pathIndex = args.indexOf("--path");
-if (pathIndex !== -1 && args[pathIndex + 1]) {
-  customPath = args[pathIndex + 1];
-}
-
 let customConfigPath = null;
-const configIndex = args.indexOf("--config");
-if (configIndex !== -1 && args[configIndex + 1]) {
-  customConfigPath = args[configIndex + 1];
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (arg === "--path" || arg === "--config") {
+    const value = args[++i];
+    if (!value || value.startsWith("-")) {
+      console.error(`❌ ${arg} 缺少路径参数`);
+      process.exit(1);
+    }
+    if (arg === "--path") customPath = value;
+    else customConfigPath = value;
+  } else if (arg === "-h" || arg === "--help") {
+    continue;
+  } else if (arg.startsWith("-")) {
+    console.error(`❌ 未知选项: ${arg}`);
+    process.exit(1);
+  } else positional.push(arg);
 }
+const command = (positional[0] || "patch").toLowerCase();
 
 // 帮助信息
 if (args.includes("-h") || args.includes("--help") || command === "help") {
@@ -38,13 +45,18 @@ if (args.includes("-h") || args.includes("--help") || command === "help") {
 
 // 主逻辑分发
 async function main() {
+  if (!["status", "models", "list-models", "set-model", "unpatch", "restore", "patch"].includes(command)) {
+    throw new Error(`未知命令: ${command}，运行 --help 查看用法`);
+  }
+  if (positional.length > (command === "set-model" ? 2 : 1)) throw new Error("存在多余位置参数");
   console.log("\n=======================================================");
   console.log("✨ Kimi Code Web 自动重命名补丁工具 (kimi-patch)");
   console.log("=======================================================\n");
 
   // 1. 定位 Kimi Code 安装目录
-  const kimiDir = findKimiCodePath(customPath);
-  if (!kimiDir) {
+  const needsInstall = !["models", "list-models"].includes(command);
+  const kimiDir = needsInstall ? findKimiCodePath(customPath) : null;
+  if (needsInstall && !kimiDir) {
     console.error("❌ 错误: 未能自动检测到 Kimi Code 安装路径！");
     console.error("👉 请尝试使用参数手动指定路径，例如：");
     console.error('   node bin/cli.js patch --path "C:\\path\\to\\node_modules\\@moonshot-ai\\kimi-code"\n');
@@ -52,15 +64,16 @@ async function main() {
   }
 
   // 2. 定位 Kimi Code 配置文件 (config.toml)
-  const kimiConfigPath = findKimiConfigPath(customConfigPath);
-  if (!kimiConfigPath) {
+  const needsConfig = !["status", "unpatch", "restore"].includes(command);
+  const kimiConfigPath = needsConfig || customConfigPath ? findKimiConfigPath(customConfigPath) : null;
+  if (needsConfig && !kimiConfigPath) {
     console.error("❌ 错误: 未能自动检测到 Kimi Code 的配置文件 (config.toml)！");
     console.error("👉 请确保已安装并配置过 Kimi Code，或使用 --config 手动指定。\n");
     process.exit(1);
   }
 
-  console.log(`📍 检测到 Kimi Code 目录:\n   ${kimiDir}`);
-  console.log(`⚙️  检测到 Kimi 配置文件:\n   ${kimiConfigPath}\n`);
+  if (kimiDir) console.log(`📍 检测到 Kimi Code 目录:\n   ${kimiDir}`);
+  if (kimiConfigPath) console.log(`⚙️  检测到 Kimi 配置文件:\n   ${kimiConfigPath}\n`);
 
   // 3. 命令路由
   switch (command) {
@@ -69,10 +82,10 @@ async function main() {
       console.log("📊 补丁状态报告:");
       console.log(`   - 独立前端脚本 (kimi-renamer.js) : ${status.isRenamerJsPresent ? "✅ 已就绪" : "❌ 未注入"}`);
       console.log(`   - index.html 引用注入          : ${status.isHtmlPatched ? "✅ 已注入" : "❌ 未注入"}`);
-      console.log(`   - CSP 跨域与网络访问放通       : ${status.isCspPatched ? "✅ 已放行" : "❌ 未放行"}`);
+      console.log(`   - 服务端重命名代理路由         : ${status.isProxyPatched ? "✅ 已注入" : "❌ 未注入"}`);
       console.log(`   - 官方文件原始备份             : ${status.hasBackup ? "✅ 已备份" : "⚪ 无备份"}`);
 
-      try {
+      if (kimiConfigPath) try {
         const modelInfo = resolveRenameModelInfo(kimiConfigPath);
         console.log("\n🤖 当前绑定的模型配置 (读取自 config.toml):");
         console.log(`   - 目标模型 ID  : ${modelInfo.targetModelId}`);
@@ -93,7 +106,9 @@ async function main() {
       let currentInfo = null;
       try {
         currentInfo = resolveRenameModelInfo(kimiConfigPath);
-      } catch (e) {}
+      } catch (e) {
+        console.warn("⚠️ 当前模型不可用于重命名:", e.message);
+      }
 
       console.log(`📋 当前 Kimi Code 中已配置的模型列表 (共 ${models.length} 个):`);
       for (const m of models) {
@@ -109,7 +124,7 @@ async function main() {
     }
 
     case "set-model": {
-      const targetModel = args[1];
+      const targetModel = positional[1];
       if (!targetModel) {
         console.error("❌ 错误: 请指定要设置的模型 ID，例如：");
         console.error('   node bin/cli.js set-model "Local/gemini-3.5-flash-lite"');
@@ -118,6 +133,7 @@ async function main() {
       }
 
       console.log(`🔄 正在更新 config.toml 中的 rename_model 为: ${targetModel}...`);
+      const originalConfig = fs.readFileSync(kimiConfigPath);
       try {
         setRenameModelInConfig(kimiConfigPath, targetModel);
         console.log("✅ config.toml 配置已更新！");
@@ -125,6 +141,7 @@ async function main() {
         const result = applyPatch(kimiDir, { configPath: kimiConfigPath });
         printPatchSuccess(result.modelInfo);
       } catch (err) {
+        fs.writeFileSync(kimiConfigPath, originalConfig);
         handleError(err, kimiDir);
         process.exit(1);
       }
@@ -148,8 +165,7 @@ async function main() {
       break;
     }
 
-    case "patch":
-    default: {
+    case "patch": {
       console.log("🚀 正在从 Kimi Code 配置中解析模型参数并应用补丁...");
       try {
         const result = applyPatch(kimiDir, { configPath: kimiConfigPath });
@@ -172,8 +188,8 @@ function printPatchSuccess(modelInfo) {
   console.log(`   - 接口 Endpoint: ${modelInfo.endpoint}`);
   console.log("\n📌 接下来:");
   console.log("   1. 执行 `kimi web` 启动 Kimi Code Web 服务。");
-  console.log("   2. 打开网页后，右下角将常驻精致的「✨ 重命名」悬浮按钮。");
-  console.log("   3. 无需安装任何浏览器插件，任何浏览器/设备打开均可使用！");
+  console.log("   2. 打开网页后，标题栏将显示重命名图标。");
+  console.log("   3. 在兼容的 Kimi Web 会话页面中点击图标生成标题。");
   console.log("\n💡 提示: 若日后需要在 config.toml 中修改重命名模型，直接修改 rename_model 或运行：");
   console.log('   node bin/cli.js set-model "<模型ID>"\n');
 }

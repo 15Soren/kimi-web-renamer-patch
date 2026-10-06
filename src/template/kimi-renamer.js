@@ -89,12 +89,6 @@
     document.querySelectorAll("button").forEach((btn) => {
       if (btn.id === "kimi-renamer-header-btn") return;
 
-      const text = (btn.innerText || "").trim();
-      if (text === "重命名" || text.includes("重命名")) {
-        btn.remove();
-        return;
-      }
-
       if (
         btn.className &&
         (btn.className.includes("kimi-renamer-fallback") ||
@@ -166,82 +160,28 @@
 
   // 6. 调用大模型生成标题（通过本地服务端同源代理，彻底杜绝 CORS 与 OPTIONS 405）
   async function generateTitleFromAI(firstMessage, token, clientId) {
-    // 方案 A: 请求服务端的同源代理接口
-    try {
-      const proxyRes = await fetch("/api/v1/custom-renamer/generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-          "X-Kimi-Client-Id": clientId,
-        },
-        body: JSON.stringify({
-          prompt: firstMessage,
-          model: AI_CONFIG.model,
-          endpoint: AI_CONFIG.endpoint,
-          apiKey: AI_CONFIG.apiKey,
-          systemPrompt: AI_CONFIG.systemPrompt,
-        }),
-      });
-
-      if (proxyRes.ok) {
-        const data = await proxyRes.json();
-        if (data && data.title) {
-          return data.title;
-        }
-      } else {
-        const errJson = await proxyRes.json().catch(() => null);
-        if (errJson && errJson.error) {
-          throw new Error(errJson.error);
-        }
-      }
-    } catch (proxyErr) {
-      if (!proxyErr.message.includes("404") && !proxyErr.message.includes("Failed to fetch")) {
-        throw proxyErr;
-      }
-      console.warn("[KimiRenamer] 服务端代理未就绪，尝试直连:", proxyErr);
-    }
-
-    // 方案 B: 前端直连回退 (严格不带思考参数，以最低思考直出)
-    const effectiveAuthToken = AI_CONFIG.apiKey || token;
-    const res = await fetch(AI_CONFIG.endpoint, {
+    const proxyRes = await fetch("/api/v1/custom-renamer/generate", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${effectiveAuthToken}`,
+        Authorization: `Bearer ${token}`,
+        "X-Kimi-Client-Id": clientId,
       },
-      body: JSON.stringify({
-        model: AI_CONFIG.model,
-        messages: [
-          { role: "system", content: AI_CONFIG.systemPrompt },
-          { role: "user", content: firstMessage.slice(0, 800) },
-        ],
-        temperature: 0.2,
-        max_tokens: 80,
-      }),
+      body: JSON.stringify({ prompt: firstMessage }),
     });
 
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`AI 响应异常 (${res.status}): ${errText.slice(0, 150)}`);
+    if (proxyRes.ok) {
+      const data = await proxyRes.json();
+      if (data && data.title) {
+        return data.title;
+      }
+    } else {
+      const errJson = await proxyRes.json().catch(() => null);
+      if (errJson && errJson.error) {
+        throw new Error(errJson.error);
+      }
     }
-
-    const result = await res.json();
-    let rawContent = result?.choices?.[0]?.message?.content || "";
-
-    // 剔除可能存在的思考过程标签
-    let title = rawContent.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
-    title = title
-      .replace(/^["'“‘《【\s]+/, "")
-      .replace(/["'”’》】\s]+$/, "")
-      .replace(/[\r\n]+/g, "")
-      .trim();
-
-    if (!title) {
-      throw new Error("大模型返回了空标题");
-    }
-
-    return title;
+    throw new Error(`重命名代理响应异常 (${proxyRes.status})，请确认补丁已应用并重启 Kimi Web`);
   }
 
   // 7. 写回会话新标题
@@ -299,10 +239,14 @@
       return;
     }
 
-    const cred = JSON.parse(
-      localStorage.getItem("kimi-web.server-credential") || "{}"
-    );
-    const token = cred.credential;
+    let cred;
+    try {
+      cred = JSON.parse(localStorage.getItem("kimi-web.server-credential") || "{}");
+    } catch (err) {
+      showToast("连接凭证格式无效，请重新连接 Kimi Web", "error");
+      return;
+    }
+    const token = cred && cred.credential;
     const clientId =
       localStorage.getItem("kimi-web.client-id") ||
       "web_kimi_renamer_patch";
@@ -361,7 +305,7 @@
       btn.type = "button";
       btn.title = "rename";
       btn.setAttribute("aria-label", "rename");
-      btn.innerHTML = `<img class="kimi-renamer-icon" src="/Kimi.ico" alt="rename" onerror="this.src='/favicon.ico'" />`;
+      btn.innerHTML = `<img class="kimi-renamer-icon" src="/kimi-renamer.ico" alt="rename" />`;
       btn.addEventListener("click", () => handleAutoRename(btn));
 
       if (moreBtn && moreBtn.parentElement === chatHeader) {
@@ -386,7 +330,7 @@
       btn.type = "button";
       btn.title = "rename";
       btn.setAttribute("aria-label", "rename");
-      btn.innerHTML = `<img class="kimi-renamer-icon" src="/Kimi.ico" alt="rename" onerror="this.src='/favicon.ico'" />`;
+      btn.innerHTML = `<img class="kimi-renamer-icon" src="/kimi-renamer.ico" alt="rename" />`;
       btn.addEventListener("click", () => handleAutoRename(btn));
 
       if (settingBtn && settingBtn.parentElement === topbar) {
