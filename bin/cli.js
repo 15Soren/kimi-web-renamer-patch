@@ -187,7 +187,7 @@ function printPatchSuccess(modelInfo) {
   console.log(`   - 所属供应商   : ${modelInfo.providerName}`);
   console.log(`   - 接口 Endpoint: ${modelInfo.endpoint}`);
   console.log("\n📌 接下来:");
-  console.log("   1. 执行 `kimi web` 启动 Kimi Code Web 服务。");
+  console.log("   1. 若 `kimi web` 已运行，请在其终端按 Ctrl+C 停止，再执行 `kimi web` 重新启动。");
   console.log("   2. 打开网页后，标题栏将显示重命名图标。");
   console.log("   3. 在兼容的 Kimi Web 会话页面中点击图标生成标题。");
   console.log("\n💡 提示: 若日后需要在 config.toml 中修改重命名模型，直接修改 rename_model 或运行：");

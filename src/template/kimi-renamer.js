@@ -176,6 +176,9 @@
         return data.title;
       }
     } else {
+      if (proxyRes.status === 404) {
+        throw new Error("重命名代理未加载，请停止并重新启动 kimi web，然后刷新页面");
+      }
       const errJson = await proxyRes.json().catch(() => null);
       if (errJson && errJson.error) {
         throw new Error(errJson.error);

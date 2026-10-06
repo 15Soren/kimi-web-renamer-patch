@@ -42,12 +42,12 @@ async function main() {
       document: { getElementById() { return null; }, querySelectorAll() { return [nativeButton]; } },
       fetch: async (url, options) => {
         browserRequests.push({ url, options });
-        return { ok: false, status: 404, json: async () => ({}) };
+        return { ok: false, status: 404, json: async () => ({ error: "Not Found" }) };
       },
     };
     vm.runInNewContext(script.replace("// 初始化与监听", "globalThis.testApi = { generateTitleFromAI, cleanupLegacyButtons }; return;\n// 初始化与监听"), browser);
     browser.testApi.cleanupLegacyButtons();
-    await assert.rejects(browser.testApi.generateTitleFromAI("first message", "web-secret", "client"), /代理响应异常/);
+    await assert.rejects(browser.testApi.generateTitleFromAI("first message", "web-secret", "client"), /停止并重新启动 kimi web/);
     assert.strictEqual(browserRequests.length, 1);
     assert.strictEqual(browserRequests[0].url, "/api/v1/custom-renamer/generate");
     assert.deepStrictEqual(JSON.parse(browserRequests[0].options.body), { prompt: "first message" });
