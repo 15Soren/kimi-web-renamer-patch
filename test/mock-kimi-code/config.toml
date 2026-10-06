@@ -1,0 +1,12 @@
+
+default_model = "Local/test-default-model"
+
+[models."Local/test-default-model"]
+provider = "Local"
+model = "test-real-model-name"
+display_name = "Test Default Model"
+
+[providers.Local]
+base_url = "http://127.0.0.1:3001/v1"
+type = "openai"
+api_key = "mock-api-key-xyz"
