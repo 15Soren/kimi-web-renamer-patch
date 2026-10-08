@@ -106,6 +106,9 @@ npm test
 
 GitHub Actions 在 Windows、macOS、Linux 与 Node.js 18、22、24 上运行这些测试。浏览器页面及真实供应商端到端兼容性需要在目标 Kimi Code 版本中另外验证。
 
+## 鸣谢
+https://linux.do
+
 ## 协议
 
 代码采用 [MIT](LICENSE) 协议。Kimi 名称与图标涉及其各自权利方，本项目的代码许可不授予第三方商标权。
