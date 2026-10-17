@@ -11,7 +11,7 @@
     "unpatch": "node bin/cli.js unpatch",
     "status": "node bin/cli.js status",
     "models": "node bin/cli.js models",
-    "test": "node test/test-mock.js && node test/test-config.js && node test/test-regressions.js"
+    "test": "node test/test-mock.js && node test/test-config.js && node test/test-regressions.js && node test/test-observer.js"
   },
   "keywords": [
     "kimi",

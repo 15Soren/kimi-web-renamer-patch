@@ -77,7 +77,7 @@
     document.head.appendChild(style);
   }
 
-  // 2. 彻底物理清理旧版残留按钮 (清除旧版悬浮按钮、带“重命名”文字的元素或外部扩展残留)
+  // 2. 仅清理本补丁的旧版残留按钮
   function cleanupLegacyButtons() {
     const legacyIds = ["kimi-renamer-btn", "kimi-renamer-fallback-btn"];
     legacyIds.forEach((id) => {
@@ -85,8 +85,7 @@
       if (el) el.remove();
     });
 
-    // 强力清除任何非标题栏的带“重命名”文本的独立按钮
-    document.querySelectorAll("button").forEach((btn) => {
+    document.querySelectorAll('button[class*="kimi-renamer-fallback"], button[class*="kimi-renamer-btn"]').forEach((btn) => {
       if (btn.id === "kimi-renamer-header-btn") return;
 
       if (
@@ -346,24 +345,36 @@
     }
   }
 
-  // 初始化与监听
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", mountHeaderButton);
-  } else {
-    mountHeaderButton();
+  // 初始化与监听：把密集 DOM 变化合并到后续任务，避免在微任务中反复扫描页面。
+  let mountTimer = null;
+  const observer = new MutationObserver(scheduleMount);
+
+  function refreshHeaderButton() {
+    mountTimer = null;
+    // 补丁自己的插入/删除不应再次触发挂载检查。
+    observer.disconnect();
+    try {
+      mountHeaderButton();
+    } finally {
+      observer.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
-  window.addEventListener("popstate", mountHeaderButton);
+  function scheduleMount() {
+    if (mountTimer !== null) return;
+    mountTimer = setTimeout(refreshHeaderButton, 100);
+  }
 
-  const observer = new MutationObserver(() => {
-    mountHeaderButton();
-    cleanupLegacyButtons();
-  });
+  function start() {
+    refreshHeaderButton();
+    window.addEventListener("popstate", scheduleMount);
+  }
 
-  observer.observe(document.body || document.documentElement, {
-    childList: true,
-    subtree: true,
-  });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
 
   console.log("[KimiRenamer] 标题栏自适应组件已就绪 (旧版原悬浮按钮已彻底清理)");
 })();
