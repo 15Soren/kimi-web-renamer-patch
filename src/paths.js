@@ -69,14 +69,10 @@ function listCacheRoots() {
     const localAppData = process.env.LOCALAPPDATA || path.join(homedir, "AppData", "Local");
     const appData = process.env.APPDATA || path.join(homedir, "AppData", "Roaming");
     roots.push(
-      path.join(localAppData, "kimi-code", "web"),
-      path.join(localAppData, "kimi-code", "Cache", "web"),
-      path.join(localAppData, "kimi-code", "dist-web"),
+      path.join(localAppData, "kimi-code"),
       path.join(localAppData, "cache", "kimi-code", "web"),
       path.join(localAppData, "Programs", "kimi-code"),
-      path.join(appData, "kimi-code", "web"),
-      path.join(appData, "kimi-code", "Cache", "web"),
-      path.join(appData, "kimi-code", "dist-web"),
+      path.join(appData, "kimi-code"),
       path.join(os.tmpdir(), "kimi-code", "web")
     );
   } else if (process.platform === "darwin") {

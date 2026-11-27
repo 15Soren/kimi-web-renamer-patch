@@ -186,7 +186,7 @@ function listDistWebDirs() {
   const roots = [...new Set([...listCacheRoots(), ...listBinarySiblingRoots()])];
 
   for (const root of roots) {
-    for (const item of scanDistWebDirsFromRoot(root, 4)) {
+    for (const item of scanDistWebDirsFromRoot(root, 5)) {
       if (!seen.has(item.dir)) {
         seen.add(item.dir);
         found.push(item);

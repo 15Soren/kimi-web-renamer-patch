@@ -113,8 +113,12 @@ async function main() {
       console.error('   node bin/cli.js patch --path "/path/to/node_modules/@moonshot-ai/kimi-code"');
     }
     if (variant !== "npm") {
+      const samplePath =
+        process.platform === "win32"
+          ? "%LOCALAPPDATA%\\kimi-code\\...\\dist-web"
+          : "$HOME/.cache/kimi-code/web/<版本>/<平台>/<hash>/dist-web";
       console.error("👉 单文件安装请确认已运行过 kimi web，或使用 --path 指定 dist-web，例如:");
-      console.error('   node bin/cli.js patch --path "$HOME/.cache/kimi-code/web/<版本>/<平台>/<hash>/dist-web"');
+      console.error(`   node bin/cli.js patch --path "${samplePath}"`);
     }
     console.error("");
     process.exit(1);
