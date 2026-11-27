@@ -1,6 +1,10 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const { kimiHome } = require("./paths");
+
+// kimi 类型在 config.toml 中也走 OpenAI Chat Completions 协议
+const SUPPORTED_PROVIDER_TYPES = ["openai", "openai_legacy", "kimi"];
 
 const DEFAULT_SYSTEM_PROMPT =
   "你是一个快速、精准的对话标题生成助手。请根据用户对话的第一条消息，快速直接地提炼一个简短主题标题。\n" +
@@ -13,19 +17,32 @@ const DEFAULT_SYSTEM_PROMPT =
   "6. 严禁输出任何解释、思考过程、前缀说明或多余文字。\n" +
   "7. 只能且仅输出最终标题本身。";
 
+function stripTitle(raw) {
+  let title = String(raw || "").replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  title = title
+    .replace(/^["'“‘《【\s]+/, "")
+    .replace(/["'”’》】\s]+$/, "")
+    .replace(/[\r\n]+/g, "")
+    .trim();
+  return title;
+}
+
 /**
- * 跨平台查找 Kimi Code 的 config.toml 路径
+ * 跨平台查找 Kimi Code 的 config.toml 路径。
+ * 传入 homeOverride 时按该用户自己的 ~/.kimi-code 查找（多用户守护进程使用）。
  */
-function findKimiConfigPath(customPath) {
+function findKimiConfigPath(customPath, homeOverride) {
   if (customPath) {
     const resolved = path.resolve(customPath);
     if (fs.existsSync(resolved)) return fs.realpathSync(resolved);
     throw new Error(`指定的配置文件不存在: ${resolved}`);
   }
 
-  const homedir = os.homedir();
+  const homedir = homeOverride || os.homedir();
   const candidates = [
-    path.join(homedir, ".kimi-code", "config.toml"),
+    homeOverride
+      ? path.join(homeOverride, ".kimi-code", "config.toml")
+      : path.join(kimiHome(), "config.toml"),
     path.join(homedir, ".kimi", "config.toml"),
     path.join(homedir, ".config", "kimi-code", "config.toml"),
   ];
@@ -166,7 +183,7 @@ function resolveRenameModelInfo(configPath, overrideModelId) {
   if (!providerEntry) {
     throw new Error(`未找到供应商配置: ${providerName || "未指定"}，托管登录认证暂不支持，请配置 OpenAI 兼容供应商`);
   }
-  if (providerEntry.type && !["openai", "openai_legacy", "kimi"].includes(providerEntry.type)) {
+  if (providerEntry.type && !SUPPORTED_PROVIDER_TYPES.includes(providerEntry.type)) {
     throw new Error(`不支持的供应商类型: ${providerEntry.type}，支持 openai、openai_legacy 和 kimi 类型的 OpenAI Chat Completions 兼容接口`);
   }
 
@@ -202,7 +219,7 @@ function resolveRenameModelInfo(configPath, overrideModelId) {
     apiKey,
     systemPrompt: DEFAULT_SYSTEM_PROMPT,
     temperature: 0.2,
-    maxTokens: 80,
+    maxTokens: 1024,
   };
 }
 
@@ -273,6 +290,9 @@ function setRenameModelInConfig(configPath, newModelId) {
 }
 
 module.exports = {
+  SUPPORTED_PROVIDER_TYPES,
+  DEFAULT_SYSTEM_PROMPT,
+  stripTitle,
   findKimiConfigPath,
   parseToml,
   resolveRenameModelInfo,

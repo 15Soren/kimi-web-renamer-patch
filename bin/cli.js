@@ -2,8 +2,10 @@
 
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
 const {
-  findKimiCodePath,
+  releaseMeta,
+  detectInstallTarget,
   checkStatus,
   applyPatch,
   restorePatch,
@@ -13,28 +15,50 @@ const {
   setRenameModelInConfig,
 } = require("../src/patcher");
 
+function tryRequire(modPath) {
+  try {
+    return require(modPath);
+  } catch (err) {
+    if (err && err.code === "MODULE_NOT_FOUND") return null;
+    throw err;
+  }
+}
+
+const serverModule = tryRequire("../src/standalone/server");
+const hasStandalone = !!serverModule;
+const variant = (releaseMeta && releaseMeta.variant) || "unified";
+const defaultMode = (releaseMeta && releaseMeta.defaultMode) || "auto";
+
 // 命令行参数解析
 const args = process.argv.slice(2);
 const positional = [];
 let customPath = null;
 let customConfigPath = null;
+let customPort = null;
+let requestedMode = defaultMode;
+
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
-  if (arg === "--path" || arg === "--config") {
+  if (arg === "--path" || arg === "--config" || arg === "--port" || arg === "--mode") {
     const value = args[++i];
     if (!value || value.startsWith("-")) {
-      console.error(`❌ ${arg} 缺少路径参数`);
+      console.error(`❌ ${arg} 缺少参数值`);
       process.exit(1);
     }
     if (arg === "--path") customPath = value;
-    else customConfigPath = value;
+    else if (arg === "--config") customConfigPath = value;
+    else if (arg === "--port") customPort = Number(value);
+    else requestedMode = value.toLowerCase();
   } else if (arg === "-h" || arg === "--help") {
     continue;
   } else if (arg.startsWith("-")) {
     console.error(`❌ 未知选项: ${arg}`);
     process.exit(1);
-  } else positional.push(arg);
+  } else {
+    positional.push(arg);
+  }
 }
+
 const command = (positional[0] || "patch").toLowerCase();
 
 // 帮助信息
@@ -43,25 +67,61 @@ if (args.includes("-h") || args.includes("--help") || command === "help") {
   process.exit(0);
 }
 
-// 主逻辑分发
 async function main() {
-  if (!["status", "models", "list-models", "set-model", "unpatch", "restore", "patch"].includes(command)) {
+  const validCommands = ["status", "models", "list-models", "set-model", "unpatch", "restore", "patch", "serve"];
+  if (!validCommands.includes(command)) {
     throw new Error(`未知命令: ${command}，运行 --help 查看用法`);
   }
-  if (positional.length > (command === "set-model" ? 2 : 1)) throw new Error("存在多余位置参数");
+  if (positional.length > (command === "set-model" ? 2 : 1)) {
+    throw new Error("存在多余位置参数");
+  }
+  if (!["auto", "npm", "standalone"].includes(requestedMode)) {
+    throw new Error(`无效的 --mode 参数: ${requestedMode}，可选值: auto, npm, standalone`);
+  }
+  if (variant === "npm" && requestedMode === "standalone") {
+    throw new Error("当前为 npm 专用发行版，不支持 --mode standalone");
+  }
+  if (variant === "standalone" && requestedMode === "npm") {
+    throw new Error("当前为单文件 (standalone) 专用发行版，不支持 --mode npm");
+  }
+
   console.log("\n=======================================================");
-  console.log("✨ Kimi Code Web 自动重命名补丁工具 (kimi-patch)");
+  console.log(`✨ Kimi Code Web 自动重命名补丁工具 (${formatVariantLabel()})`);
   console.log("=======================================================\n");
 
-  // 1. 定位 Kimi Code 安装目录
+  if (command === "serve") {
+    if (!hasStandalone) {
+      throw new Error("当前为 npm 专用发行版，不需要启动 sidecar（直接重启 kimi web 即可）");
+    }
+    const started = await serverModule.startServer(customPort ? { port: customPort } : {});
+    const shownHost = started.host === "0.0.0.0" ? "127.0.0.1" : started.host;
+    console.log(`✅ sidecar 已启动: http://${shownHost}:${started.port}/ (监听 ${started.host})`);
+    console.log(`🤖 使用模型: ${started.config.model}`);
+    const shutdown = () => started.server.close(() => process.exit(0));
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    return;
+  }
+
+  // 1. 定位 Kimi Code 目标目录与模式
   const needsInstall = !["models", "list-models"].includes(command);
-  const kimiDir = needsInstall ? findKimiCodePath(customPath) : null;
-  if (needsInstall && !kimiDir) {
+  const detected = needsInstall ? detectInstallTarget(customPath, requestedMode) : null;
+  if (needsInstall && !detected) {
     console.error("❌ 错误: 未能自动检测到 Kimi Code 安装路径！");
-    console.error("👉 请尝试使用参数手动指定路径，例如：");
-    console.error('   node bin/cli.js patch --path "C:\\path\\to\\node_modules\\@moonshot-ai\\kimi-code"\n');
+    if (variant !== "standalone") {
+      console.error('👉 npm 安装请使用 --path 指定根目录，例如:');
+      console.error('   node bin/cli.js patch --path "/path/to/node_modules/@moonshot-ai/kimi-code"');
+    }
+    if (variant !== "npm") {
+      console.error("👉 单文件安装请确认已运行过 kimi web，或使用 --path 指定 dist-web，例如:");
+      console.error('   node bin/cli.js patch --path "$HOME/.cache/kimi-code/web/<版本>/<平台>/<hash>/dist-web"');
+    }
+    console.error("");
     process.exit(1);
   }
+
+  const targetDir = detected ? detected.targetDir : null;
+  const activeMode = detected ? detected.mode : null;
 
   // 2. 定位 Kimi Code 配置文件 (config.toml)
   const needsConfig = !["status", "unpatch", "restore"].includes(command);
@@ -72,28 +132,45 @@ async function main() {
     process.exit(1);
   }
 
-  if (kimiDir) console.log(`📍 检测到 Kimi Code 目录:\n   ${kimiDir}`);
-  if (kimiConfigPath) console.log(`⚙️  检测到 Kimi 配置文件:\n   ${kimiConfigPath}\n`);
+  if (targetDir) {
+    console.log(`🧭 运行模式: ${activeMode === "standalone" ? "单文件安装 (standalone + sidecar)" : "npm 安装 (同源路由注入)"}`);
+    console.log(`📍 检测到目标目录:\n   ${targetDir}`);
+  }
+  if (kimiConfigPath) {
+    console.log(`⚙️  检测到 Kimi 配置文件:\n   ${kimiConfigPath}\n`);
+  }
 
   // 3. 命令路由
   switch (command) {
     case "status": {
-      const status = checkStatus(kimiDir);
+      const status = checkStatus(targetDir, { mode: activeMode });
       console.log("📊 补丁状态报告:");
-      console.log(`   - 独立前端脚本 (kimi-renamer.js) : ${status.isRenamerJsPresent ? "✅ 已就绪" : "❌ 未注入"}`);
+      console.log(`   - 前端脚本 (kimi-renamer.js)   : ${status.isRenamerJsPresent ? "✅ 已就绪" : "❌ 未注入"}`);
       console.log(`   - index.html 引用注入          : ${status.isHtmlPatched ? "✅ 已注入" : "❌ 未注入"}`);
-      console.log(`   - 服务端重命名代理路由         : ${status.isProxyPatched ? "✅ 已注入" : "❌ 未注入"}`);
+      if (activeMode === "npm") {
+        console.log(`   - 服务端重命名代理路由         : ${status.isProxyPatched ? "✅ 已注入" : "❌ 未注入"}`);
+      } else {
+        console.log(`   - sidecar 配置                 : ${status.serverConfig ? "✅ 已写入" : "❌ 未写入"}`);
+        if (status.serverConfig) {
+          console.log(`   - sidecar 端口                 : ${status.serverConfig.port}`);
+          console.log(`   - sidecar 模型                 : ${status.serverConfig.model}`);
+          const alive = await checkSidecar(status.serverConfig.port);
+          console.log(`   - sidecar 运行状态             : ${alive ? "✅ 运行中" : "⚪ 未运行（点击按钮前需先启动）"}`);
+        }
+      }
       console.log(`   - 官方文件原始备份             : ${status.hasBackup ? "✅ 已备份" : "⚪ 无备份"}`);
 
-      if (kimiConfigPath) try {
-        const modelInfo = resolveRenameModelInfo(kimiConfigPath);
-        console.log("\n🤖 当前绑定的模型配置 (读取自 config.toml):");
-        console.log(`   - 目标模型 ID  : ${modelInfo.targetModelId}`);
-        console.log(`   - 模型生效策略 : ${modelInfo.isInheritedFromDefault ? "默认继承 default_model" : "已单独配置 rename_model"}`);
-        console.log(`   - 对应供应商   : ${modelInfo.providerName}`);
-        console.log(`   - 接口端点     : ${modelInfo.endpoint}`);
-      } catch (e) {
-        console.warn("\n⚠️ 读取模型配置失败:", e.message);
+      if (kimiConfigPath) {
+        try {
+          const modelInfo = resolveRenameModelInfo(kimiConfigPath);
+          console.log("\n🤖 当前绑定的模型配置 (读取自 config.toml):");
+          console.log(`   - 目标模型 ID  : ${modelInfo.targetModelId}`);
+          console.log(`   - 模型生效策略 : ${modelInfo.isInheritedFromDefault ? "默认继承 default_model" : "已单独配置 rename_model"}`);
+          console.log(`   - 对应供应商   : ${modelInfo.providerName}`);
+          console.log(`   - 接口端点     : ${modelInfo.endpoint}`);
+        } catch (e) {
+          console.warn("\n⚠️ 读取模型配置失败:", e.message);
+        }
       }
 
       console.log(`\n👉 最终状态: ${status.isFullyPatched ? "🎉 补丁完全生效中" : "⚪ 未打补丁或部分生效"}\n`);
@@ -137,12 +214,16 @@ async function main() {
       try {
         setRenameModelInConfig(kimiConfigPath, targetModel);
         console.log("✅ config.toml 配置已更新！");
-        console.log("🚀 正在自动重新编译并注入补丁脚本...");
-        const result = applyPatch(kimiDir, { configPath: kimiConfigPath });
-        printPatchSuccess(result.modelInfo);
+        console.log("🚀 正在自动重新应用补丁...");
+        const result = applyPatch(targetDir, {
+          mode: activeMode,
+          configPath: kimiConfigPath,
+          port: customPort || undefined,
+        });
+        printPatchSuccess(result);
       } catch (err) {
         fs.writeFileSync(kimiConfigPath, originalConfig);
-        handleError(err, kimiDir);
+        handleError(err, targetDir);
         process.exit(1);
       }
       break;
@@ -152,14 +233,15 @@ async function main() {
     case "restore": {
       console.log("🔄 正在还原官方原版文件...");
       try {
-        const restored = restorePatch(kimiDir);
-        if (restored) {
+        const res = restorePatch(targetDir, { mode: activeMode });
+        const restoredAny = typeof res === "boolean" ? res : Boolean(res && res.restoredAny);
+        if (restoredAny) {
           console.log("✅ 成功还原！所有修改已撤销，注入的脚本已清理。\n");
         } else {
           console.log("ℹ️  原版文件未发现修改，无需还原。\n");
         }
       } catch (err) {
-        handleError(err, kimiDir);
+        handleError(err, targetDir);
         process.exit(1);
       }
       break;
@@ -168,10 +250,14 @@ async function main() {
     case "patch": {
       console.log("🚀 正在从 Kimi Code 配置中解析模型参数并应用补丁...");
       try {
-        const result = applyPatch(kimiDir, { configPath: kimiConfigPath });
-        printPatchSuccess(result.modelInfo);
+        const result = applyPatch(targetDir, {
+          mode: activeMode,
+          configPath: kimiConfigPath,
+          port: customPort || undefined,
+        });
+        printPatchSuccess(result);
       } catch (err) {
-        handleError(err, kimiDir);
+        handleError(err, targetDir);
         process.exit(1);
       }
       break;
@@ -179,25 +265,56 @@ async function main() {
   }
 }
 
-function printPatchSuccess(modelInfo) {
-  console.log("✅ 恭喜！原生补丁已成功应用！");
+function formatVariantLabel() {
+  if (variant === "npm") return "kimi-patch / npm 版";
+  if (variant === "standalone") return "kimi-patch / 单文件版";
+  return "kimi-patch / 双模式版";
+}
+
+function checkSidecar(port) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: "127.0.0.1", port, path: "/health", timeout: 1000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
+}
+
+function printPatchSuccess(result) {
+  const modelInfo = result.modelInfo;
+  console.log("✅ 恭喜！补丁已成功应用！");
   console.log("\n🤖 本次补丁绑定的模型信息:");
   console.log(`   - 选定模型 ID  : ${modelInfo.targetModelId}`);
   console.log(`   - 配置来源     : ${modelInfo.isInheritedFromDefault ? "继承自 default_model (默认)" : "来自专属 rename_model"}`);
   console.log(`   - 所属供应商   : ${modelInfo.providerName}`);
   console.log(`   - 接口 Endpoint: ${modelInfo.endpoint}`);
-  console.log("\n📌 接下来:");
-  console.log("   1. 若 `kimi web` 已运行，请在其终端按 Ctrl+C 停止，再执行 `kimi web` 重新启动。");
-  console.log("   2. 打开网页后，标题栏将显示重命名图标。");
-  console.log("   3. 在兼容的 Kimi Web 会话页面中点击图标生成标题。");
-  console.log("\n💡 提示: 若日后需要在 config.toml 中修改重命名模型，直接修改 rename_model 或运行：");
-  console.log('   node bin/cli.js set-model "<模型ID>"\n');
+
+  if (result.mode === "standalone") {
+    console.log("\n🛰️  单文件模式 Sidecar 信息:");
+    console.log(`   - 前端目录     : ${result.webDir}`);
+    console.log(`   - sidecar 配置 : ${result.serverConfigPath}`);
+    console.log(`   - sidecar 地址 : http://127.0.0.1:${result.port}/`);
+    console.log("\n📌 接下来:");
+    console.log("   1. 启动 sidecar: node bin/cli.js serve（或运行 ./bin/kimi-web-renamer 同时启动）");
+    console.log("   2. 如需常驻自动守护（防止 kimi web 启动时校验覆盖 index.html），运行 ./bin/install-daemon");
+    console.log("   3. 刷新页面后，在会话标题栏点击重命名图标。\n");
+  } else {
+    console.log("\n📌 接下来:");
+    console.log("   1. 若 `kimi web` 已运行，请在其终端按 Ctrl+C 停止，再执行 `kimi web` 重新启动。");
+    console.log("   2. 打开网页后，标题栏将显示重命名图标。");
+    console.log("   3. 在兼容的 Kimi Web 会话页面中点击图标生成标题。\n");
+  }
 }
 
-function handleError(err, kimiDir) {
+function handleError(err, targetDir) {
   if (err.code === "EPERM" || err.code === "EACCES") {
     console.error("❌ 权限不足 (EPERM / EACCES)！");
-    console.error(`   目标 Kimi Code 安装在受系统权限保护的目录:\n   ${kimiDir}\n`);
+    console.error(`   目标 Kimi Code 目录受系统权限保护:\n   ${targetDir}\n`);
     console.error("👉 解决方案:");
     if (process.platform === "win32") {
       console.error("   请【右键以管理员身份运行】打开终端 (PowerShell 或 CMD)，再执行以下命令：");
@@ -213,8 +330,18 @@ function handleError(err, kimiDir) {
 }
 
 function printHelp() {
+  const serveLine = hasStandalone
+    ? "  serve                  启动本地 sidecar 模型代理（仅单文件模式）\n"
+    : "";
+  const modeOption = variant === "unified"
+    ? "  --mode <mode>          指定安装模式: auto（默认）, npm, standalone\n"
+    : "";
+  const portOption = hasStandalone
+    ? "  --port <port>          指定 sidecar 监听端口（默认 58629，仅单文件模式）\n"
+    : "";
+
   console.log(`
-Kimi Code Web 自动重命名补丁工具 (kimi-patch)
+Kimi Code Web 自动重命名补丁工具 (${formatVariantLabel()})
 
 核心特性:
   直接复用 Kimi Code 自身的 config.toml 配置文件，无需单独配置供应商与 Key！
@@ -224,17 +351,17 @@ Kimi Code Web 自动重命名补丁工具 (kimi-patch)
   node bin/cli.js [命令] [选项]
 
 可用命令:
-  patch                  应用原生补丁（默认命令，自动读取 config.toml）
-  models, list-models    列出 config.toml 中所有已配置的模型
+  patch                  应用补丁（默认命令，自动读取 config.toml）
+${serveLine}  models, list-models    列出 config.toml 中所有已配置的模型
   set-model <model_id>   为重命名指定新模型，更新 config.toml 并自动应用 patch
   unpatch, restore       还原为官方原版，撤销所有修改并清理脚本
   status                 检查当前补丁状态与绑定的模型信息
   help                   显示此帮助信息
 
 选项:
-  --path <dir>           手动指定 kimi-code 安装根目录
+${modeOption}  --path <dir>           手动指定 Kimi Code 安装根目录或 dist-web 目录
   --config <path>        手动指定 config.toml 路径
-  -h, --help             显示帮助信息
+${portOption}  -h, --help             显示帮助信息
 
 示例:
   node bin/cli.js
@@ -246,6 +373,6 @@ Kimi Code Web 自动重命名补丁工具 (kimi-patch)
 }
 
 main().catch((err) => {
-  console.error("❌ 发生未捕获错误:", err);
+  console.error("❌ 发生错误:", err.message || err);
   process.exit(1);
 });

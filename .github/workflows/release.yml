@@ -1,0 +1,32 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run full test suite
+        run: npm test
+      - name: Build npm and standalone release packages
+        run: node scripts/build-releases.js --archive
+      - name: List release artifacts
+        run: ls -la dist/releases/
+      - name: Upload GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/releases/*.tar.gz
+            dist/releases/*.zip

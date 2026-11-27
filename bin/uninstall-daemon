@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# 停止并移除 kimi-renamer 守护进程。
+set -euo pipefail
+
+UNIT_DIR="$HOME/.config/systemd/user"
+UNIT="$UNIT_DIR/kimi-renamer-watch.service"
+
+if [ -d /run/systemd/system ]; then
+  systemctl --user disable --now kimi-renamer-watch.service 2>/dev/null || true
+  systemctl --user daemon-reload 2>/dev/null || true
+fi
+
+rm -f "$UNIT"
+echo "✅ 守护进程已移除（sidecar 如仍在运行，可用 pkill -f src/standalone/server.js 结束）"

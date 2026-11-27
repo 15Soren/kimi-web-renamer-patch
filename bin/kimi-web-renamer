@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# 启动 sidecar（如未运行）并执行 kimi web，退出时一并清理 sidecar。
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+KIMI_CODE_HOME="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+CONFIG="${KIMI_RENAMER_SERVER_CONFIG:-$KIMI_CODE_HOME/kimi-renamer/server.json}"
+
+if [ ! -f "$CONFIG" ]; then
+  echo "[kimi-web-renamer] 未找到 sidecar 配置，请先运行: node \"$ROOT/bin/cli.js\" patch" >&2
+  exit 1
+fi
+
+PORT="${KIMI_RENAMER_PORT:-$(node -e 'const c=require(process.argv[1]);console.log(c.port||58629)' "$CONFIG")}"
+
+healthy() {
+  node -e '
+    const http = require("http");
+    const req = http.get({ host: "127.0.0.1", port: Number(process.argv[1]), path: "/health", timeout: 1000 }, (res) => {
+      res.resume();
+      process.exit(res.statusCode === 200 ? 0 : 1);
+    });
+    req.on("error", () => process.exit(1));
+    req.on("timeout", () => { req.destroy(); process.exit(1); });
+  ' "$PORT" >/dev/null 2>&1
+}
+
+STARTED=0
+if ! healthy; then
+  node "$ROOT/src/standalone/server.js" &
+  SIDECAR_PID=$!
+  STARTED=1
+  for _ in $(seq 1 50); do
+    healthy && break
+    sleep 0.1
+  done
+  if ! healthy; then
+    echo "[kimi-web-renamer] sidecar 启动失败（端口 $PORT）" >&2
+    kill "$SIDECAR_PID" 2>/dev/null || true
+    exit 1
+  fi
+  echo "[kimi-web-renamer] sidecar 已启动: http://127.0.0.1:$PORT/"
+fi
+
+cleanup() {
+  if [ "$STARTED" = "1" ] && [ -n "${SIDECAR_PID:-}" ]; then
+    kill "$SIDECAR_PID" 2>/dev/null || true
+    wait "$SIDECAR_PID" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+KIMI_BIN="${KIMI_BIN:-$(command -v kimi || true)}"
+if [ -z "$KIMI_BIN" ]; then
+  echo "[kimi-web-renamer] 找不到 kimi 可执行文件，请确认 Kimi Code 已安装" >&2
+  exit 1
+fi
+
+"$KIMI_BIN" web "$@"

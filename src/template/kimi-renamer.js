@@ -189,8 +189,44 @@
     return null;
   }
 
-  // 6. 调用大模型生成标题（通过本地服务端同源代理，彻底杜绝 CORS 与 OPTIONS 405）
+  // 6. 调用大模型生成标题（支持 npm 同源代理与单文件 sidecar 两种模式）
+  function renamerBaseUrl() {
+    const port = (AI_CONFIG && AI_CONFIG.port) || 58629;
+    const hostname = window.location.hostname || "127.0.0.1";
+    const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
+    return `http://${host}:${port}`;
+  }
+
   async function generateTitleFromAI(firstMessage, token, clientId) {
+    if (AI_CONFIG && AI_CONFIG.mode === "sidecar") {
+      const headers = { "Content-Type": "application/json" };
+      if (AI_CONFIG.token) {
+        headers["X-Kimi-Renamer-Token"] = AI_CONFIG.token;
+      }
+
+      let proxyRes;
+      try {
+        proxyRes = await fetch(`${renamerBaseUrl()}/generate`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ prompt: firstMessage }),
+        });
+      } catch (err) {
+        throw new Error(
+          "重命名服务不可达，请先启动 kimi-web-renamer 或 node bin/cli.js serve"
+        );
+      }
+
+      const data = await proxyRes.json().catch(() => null);
+      if (proxyRes.ok && data && data.title) {
+        return data.title;
+      }
+      if (data && data.error) {
+        throw new Error(data.error);
+      }
+      throw new Error(`重命名服务响应异常 (${proxyRes.status})`);
+    }
+
     const proxyRes = await fetch("/api/v1/custom-renamer/generate", {
       method: "POST",
       headers: {
