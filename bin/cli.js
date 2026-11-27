@@ -4,6 +4,11 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const {
+  homeFromWebDir,
+  sudoUserHome,
+  serverConfigPath,
+} = require("../src/paths");
+const {
   releaseMeta,
   detectInstallTarget,
   checkStatus,
@@ -140,7 +145,19 @@ async function main() {
 
   // 2. 定位 Kimi Code 配置文件 (config.toml)
   const needsConfig = !["status", "unpatch", "restore"].includes(command);
-  const kimiConfigPath = needsConfig || customConfigPath ? findKimiConfigPath(customConfigPath) : null;
+  const configHomeOverride = !customConfigPath
+    ? (activeMode === "standalone" && targetDir ? homeFromWebDir(targetDir) : null) || sudoUserHome()
+    : null;
+  let kimiConfigPath = null;
+  if (needsConfig || customConfigPath) {
+    kimiConfigPath = findKimiConfigPath(customConfigPath, configHomeOverride);
+  } else if (command === "status") {
+    try {
+      kimiConfigPath = findKimiConfigPath(null, configHomeOverride);
+    } catch (e) {
+      kimiConfigPath = null;
+    }
+  }
   if (needsConfig && !kimiConfigPath) {
     console.error("❌ 错误: 未能自动检测到 Kimi Code 的配置文件 (config.toml)！");
     console.error("👉 请确保已安装并配置过 Kimi Code，或使用 --config 手动指定。\n");
@@ -159,32 +176,57 @@ async function main() {
   switch (command) {
     case "status": {
       const status = checkStatus(targetDir, { mode: activeMode });
+      let liveSidecar = null;
       console.log("📊 补丁状态报告:");
       console.log(`   - 前端脚本 (kimi-renamer.js)   : ${status.isRenamerJsPresent ? "✅ 已就绪" : "❌ 未注入"}`);
       console.log(`   - index.html 引用注入          : ${status.isHtmlPatched ? "✅ 已注入" : "❌ 未注入"}`);
       if (activeMode === "npm") {
         console.log(`   - 服务端重命名代理路由         : ${status.isProxyPatched ? "✅ 已注入" : "❌ 未注入"}`);
       } else {
+        const cfgPath = serverConfigPath();
+        const probePort = (status.serverConfig && status.serverConfig.port) || status.port || 58629;
+        liveSidecar = await checkSidecar(probePort);
+        console.log(`   - sidecar 配置文件             : ${cfgPath}`);
         console.log(`   - sidecar 配置                 : ${status.serverConfig ? "✅ 已写入" : "❌ 未写入"}`);
         if (status.serverConfig) {
           console.log(`   - sidecar 端口                 : ${status.serverConfig.port}`);
-          console.log(`   - sidecar 模型                 : ${status.serverConfig.model}`);
-          const alive = await checkSidecar(status.serverConfig.port);
-          console.log(`   - sidecar 运行状态             : ${alive ? "✅ 运行中" : "⚪ 未运行（点击按钮前需先启动）"}`);
+          console.log(`   - sidecar 配置模型             : ${status.serverConfig.model}`);
+        }
+        if (liveSidecar.alive) {
+          const liveModelLabel = liveSidecar.model ? ` (实际生效模型: ${liveSidecar.model})` : "";
+          console.log(`   - sidecar 运行状态             : ✅ 运行中${liveModelLabel}`);
+        } else {
+          console.log("   - sidecar 运行状态             : ⚪ 未运行（点击按钮前需先启动）");
         }
       }
       console.log(`   - 官方文件原始备份             : ${status.hasBackup ? "✅ 已备份" : "⚪ 无备份"}`);
 
+      let modelInfo = null;
       if (kimiConfigPath) {
         try {
-          const modelInfo = resolveRenameModelInfo(kimiConfigPath);
+          modelInfo = resolveRenameModelInfo(kimiConfigPath);
           console.log("\n🤖 当前绑定的模型配置 (读取自 config.toml):");
           console.log(`   - 目标模型 ID  : ${modelInfo.targetModelId}`);
+          console.log(`   - 实际请求模型 : ${modelInfo.actualModel}`);
           console.log(`   - 模型生效策略 : ${modelInfo.isInheritedFromDefault ? "默认继承 default_model" : "已单独配置 rename_model"}`);
           console.log(`   - 对应供应商   : ${modelInfo.providerName}`);
           console.log(`   - 接口端点     : ${modelInfo.endpoint}`);
         } catch (e) {
           console.warn("\n⚠️ 读取模型配置失败:", e.message);
+        }
+      }
+
+      if (activeMode === "standalone") {
+        if (liveSidecar && liveSidecar.alive && status.serverConfig && liveSidecar.model && liveSidecar.model !== status.serverConfig.model) {
+          console.warn(`\n⚠️ 警告: 运行中的 sidecar 实际模型 (${liveSidecar.model}) 与当前 server.json (${status.serverConfig.model}) 不一致！`);
+          console.warn("   可能是系统级守护进程使用了不同的 KIMI_CODE_HOME（例如 /opt/kimi-code），请对该目录执行 patch。");
+        } else if (liveSidecar && liveSidecar.alive && !status.serverConfig && liveSidecar.model) {
+          console.warn(`\n⚠️ 警告: 当前路径未找到 server.json，但检测到 127.0.0.1:${liveSidecar.port} 上已有 sidecar 运行中 (${liveSidecar.model})。`);
+          console.warn("   可能是系统级守护进程使用了不同的 KIMI_CODE_HOME。");
+        } else if (modelInfo && status.serverConfig && status.serverConfig.model !== modelInfo.actualModel) {
+          console.warn(`\n⚠️ 提示: server.json 中的模型 (${status.serverConfig.model}) 与 config.toml (${modelInfo.actualModel}) 不一致，请重新执行 patch 使其生效。`);
+        } else if (liveSidecar && liveSidecar.alive && modelInfo && liveSidecar.model && liveSidecar.model !== modelInfo.actualModel) {
+          console.warn(`\n⚠️ 提示: 运行中的 sidecar 模型 (${liveSidecar.model}) 与 config.toml (${modelInfo.actualModel}) 不一致，请重新执行 patch 使其生效。`);
         }
       }
 
@@ -233,6 +275,7 @@ async function main() {
         const result = applyPatch(targetDir, {
           mode: activeMode,
           configPath: kimiConfigPath,
+          configPathExplicit: Boolean(customConfigPath),
           port: customPort || undefined,
         });
         printPatchSuccess(result);
@@ -268,6 +311,7 @@ async function main() {
         const result = applyPatch(targetDir, {
           mode: activeMode,
           configPath: kimiConfigPath,
+          configPathExplicit: Boolean(customConfigPath),
           port: customPort || undefined,
         });
         printPatchSuccess(result);
@@ -289,13 +333,27 @@ function formatVariantLabel() {
 function checkSidecar(port) {
   return new Promise((resolve) => {
     const req = http.get({ host: "127.0.0.1", port, path: "/health", timeout: 1000 }, (res) => {
-      res.resume();
-      resolve(res.statusCode === 200);
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        if (res.statusCode !== 200) {
+          resolve({ alive: false, model: null, port });
+          return;
+        }
+        let model = null;
+        try {
+          const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          if (parsed && typeof parsed.model === "string") model = parsed.model;
+        } catch (e) {
+          // 忽略非 JSON 响应
+        }
+        resolve({ alive: true, model, port });
+      });
     });
-    req.on("error", () => resolve(false));
+    req.on("error", () => resolve({ alive: false, model: null, port }));
     req.on("timeout", () => {
       req.destroy();
-      resolve(false);
+      resolve({ alive: false, model: null, port });
     });
   });
 }

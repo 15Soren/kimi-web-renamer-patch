@@ -365,15 +365,36 @@ function applyPatch(webDir, options = {}) {
   const previous = readServerConfig(configPath);
 
   let modelInfo;
+  let shouldPersistExplicitConfig = false;
   if (options && options.endpoint) {
     modelInfo = options;
   } else {
+    const explicitOpt = Boolean(options && options.configPath && options.configPathExplicit !== false);
     const savedConfigPath =
       previous && typeof previous.sourceConfigPath === "string" && fs.existsSync(previous.sourceConfigPath)
         ? previous.sourceConfigPath
         : null;
-    const tomlConfigPath =
-      (options && options.configPath) || savedConfigPath || findKimiConfigPath(null, homeFromWebDir(webDir));
+    const savedIsExplicit = Boolean(previous && previous.sourceConfigExplicit === true);
+    const webDirHome = homeFromWebDir(webDir);
+    const webDirConfigPath = webDirHome ? findKimiConfigPath(null, webDirHome) : null;
+
+    let tomlConfigPath = null;
+    if (options && options.configPath) {
+      tomlConfigPath = options.configPath;
+      shouldPersistExplicitConfig = explicitOpt;
+    } else if (savedConfigPath && savedIsExplicit) {
+      tomlConfigPath = savedConfigPath;
+      shouldPersistExplicitConfig = true;
+    } else if (webDirConfigPath) {
+      // 多用户守护进程 (KIMI_RENAMER_ALL_USERS=1) 优先读取当前 dist-web 所属用户自己的 config.toml，
+      // 避免被其他用户（如 root）历史写入的 sourceConfigPath 劫持
+      tomlConfigPath = webDirConfigPath;
+    } else if (savedConfigPath) {
+      tomlConfigPath = savedConfigPath;
+    } else {
+      tomlConfigPath = findKimiConfigPath(null, webDirHome);
+    }
+
     if (!tomlConfigPath) {
       throw new Error("未能定位到系统的 Kimi Code 配置文件 (config.toml)");
     }
@@ -403,7 +424,9 @@ function applyPatch(webDir, options = {}) {
     host: options.host || (previous && previous.host) || DEFAULT_HOST,
     port,
     token,
-    ...(modelInfo.configPath ? { sourceConfigPath: modelInfo.configPath } : {}),
+    ...(shouldPersistExplicitConfig && modelInfo.configPath
+      ? { sourceConfigPath: modelInfo.configPath, sourceConfigExplicit: true }
+      : {}),
   };
 
   const indexHtml = path.join(webDir, "index.html");

@@ -285,6 +285,70 @@ async function main() {
     }
     console.log("✅ 8. 深层缓存探测、自定义端口保留、IPv4 归一化、纯 Node PATH 查找与非法端口拦截通过");
 
+    // 9. 多用户 (KIMI_RENAMER_ALL_USERS) 场景：历史非显式 sourceConfigPath 不能劫持其他用户自己的 config.toml
+    const userAHome = path.join(tempDir, "home-user-a");
+    const userBHome = path.join(tempDir, "home-user-b");
+    const userAConfig = path.join(userAHome, ".kimi-code", "config.toml");
+    const userBConfig = path.join(userBHome, ".kimi-code", "config.toml");
+    const userBWebDir = path.join(userBHome, ".cache", "kimi-code", "web", "2.8.1", "linux-x64", "hashb", "dist-web");
+    fs.mkdirSync(path.dirname(userAConfig), { recursive: true });
+    fs.mkdirSync(path.dirname(userBConfig), { recursive: true });
+    fs.mkdirSync(userBWebDir, { recursive: true });
+    fs.writeFileSync(path.join(userBWebDir, "index.html"), initialHtml, "utf8");
+    const makeToml = (modelName) => [
+      `rename_model = "magpie/${modelName}"`,
+      `default_model = "magpie/${modelName}"`,
+      `[providers.magpie]`,
+      `type = "kimi"`,
+      `base_url = "http://127.0.0.1:3425/v1"`,
+      `api_key = "test-key"`,
+      `[models."magpie/${modelName}"]`,
+      `provider = "magpie"`,
+      `model = "${modelName}"`,
+    ].join("\n") + "\n";
+    fs.writeFileSync(userAConfig, makeToml("old-root-model"), "utf8");
+    fs.writeFileSync(userBConfig, makeToml("trae-cn/Doubao-Seed-2.1-Turbo"), "utf8");
+
+    // 模拟旧版 v1.2.3 遗留的 server.json（带非显式的 sourceConfigPath 指向 userA）
+    const sharedServerConfig = path.join(tempDir, "shared-opt-state", "server.json");
+    standaloneMode.writeServerConfig(
+      {
+        version: 1,
+        endpoint: "http://127.0.0.1:3425/v1/chat/completions",
+        apiKey: "test-key",
+        model: "old-root-model",
+        host: "0.0.0.0",
+        port: 60004,
+        token: "a".repeat(48),
+        sourceConfigPath: userAConfig,
+      },
+      sharedServerConfig
+    );
+
+    const userBPatched = applyPatch(userBWebDir, { serverConfigPath: sharedServerConfig });
+    assert.strictEqual(
+      userBPatched.modelInfo.actualModel,
+      "trae-cn/Doubao-Seed-2.1-Turbo",
+      "非显式历史 sourceConfigPath 不应劫持 dist-web 所属用户自己的 config.toml"
+    );
+    assert.strictEqual(readServerConfig(sharedServerConfig).model, "trae-cn/Doubao-Seed-2.1-Turbo");
+    assert.strictEqual(readServerConfig(sharedServerConfig).port, 60004, "应继续保留原端口");
+
+    // 验证 status 在 config.toml 变更但尚未 patch 时会给出不一致提示
+    fs.writeFileSync(userBConfig, makeToml("newer-model-after-edit"), "utf8");
+    const mismatchStatus = spawnSync(
+      process.execPath,
+      [cli, "status", "--mode", "standalone", "--path", userBWebDir],
+      { encoding: "utf8", env: { ...process.env, KIMI_RENAMER_SERVER_CONFIG: sharedServerConfig } }
+    );
+    assert.strictEqual(mismatchStatus.status, 0, mismatchStatus.stderr);
+    assert.ok(
+      mismatchStatus.stdout.includes("newer-model-after-edit") &&
+        mismatchStatus.stderr.includes("不一致"),
+      "status 应显示 config.toml 实际模型并对 server.json 不一致发出提醒"
+    );
+    console.log("✅ 9. Linux 多用户配置归属隔离与 status 模型一致性诊断通过");
+
     console.log("\n🎉 单文件模式全部测试通过！\n");
   } finally {
     if (prevCacheRoots === undefined) delete process.env.KIMI_RENAMER_CACHE_ROOTS;

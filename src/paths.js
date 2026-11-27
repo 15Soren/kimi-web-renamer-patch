@@ -140,6 +140,28 @@ function kimiHomeForWebDir(webDir) {
   return home ? path.join(home, ".kimi-code") : null;
 }
 
+/**
+ * Linux/POSIX 下通过 sudo 以 root 运行时，解析原调用用户 (SUDO_USER) 的 home 目录
+ */
+function sudoUserHome(env = process.env) {
+  if (process.platform === "win32") return null;
+  if (typeof process.getuid === "function" && process.getuid() !== 0) return null;
+  const sudoUser = env.SUDO_USER;
+  if (!sudoUser || sudoUser === "root") return null;
+  try {
+    const passwd = fs.readFileSync("/etc/passwd", "utf8");
+    for (const line of passwd.split("\n")) {
+      const parts = line.split(":");
+      if (parts.length >= 6 && parts[0] === sudoUser && parts[5]) {
+        return parts[5];
+      }
+    }
+  } catch (e) {
+    // 忽略读取 /etc/passwd 失败
+  }
+  return null;
+}
+
 function listCacheRoots() {
   const override = process.env.KIMI_RENAMER_CACHE_ROOTS;
   if (override) {
@@ -162,6 +184,11 @@ function listCacheRoots() {
     path.join(home, "bin", "dist-web"),
     path.join(home, "versions")
   );
+
+  const sudoHome = sudoUserHome();
+  if (sudoHome) {
+    roots.push(path.join(sudoHome, ".cache", "kimi-code", "web"));
+  }
 
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || path.join(homedir, "AppData", "Local");
@@ -211,5 +238,6 @@ module.exports = {
   findExecutablesInPath,
   homeFromWebDir,
   kimiHomeForWebDir,
+  sudoUserHome,
   listCacheRoots,
 };

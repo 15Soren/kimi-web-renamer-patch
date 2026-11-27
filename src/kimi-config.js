@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
-const { kimiHome } = require("./paths");
+const { kimiHome, sudoUserHome } = require("./paths");
 
 // kimi 类型在 config.toml 中也走 OpenAI Chat Completions 协议
 const SUPPORTED_PROVIDER_TYPES = ["openai", "openai_legacy", "kimi"];
@@ -60,6 +60,15 @@ function findKimiConfigPath(customPath, homeOverride) {
       ? process.env.APPDATA || path.join(homedir, "AppData", "Roaming")
       : path.join(homedir, "AppData", "Roaming");
     candidates.push(path.join(appData, "kimi-code", "config.toml"));
+  } else if (!homeOverride) {
+    const sudoHome = sudoUserHome();
+    if (sudoHome && !isSamePath(sudoHome, currentHome)) {
+      candidates.push(
+        path.join(sudoHome, ".kimi-code", "config.toml"),
+        path.join(sudoHome, ".kimi", "config.toml"),
+        path.join(sudoHome, ".config", "kimi-code", "config.toml")
+      );
+    }
   }
 
   for (const candidate of candidates) {

@@ -11,4 +11,17 @@ if [ -d /run/systemd/system ]; then
 fi
 
 rm -f "$UNIT"
-echo "✅ 守护进程已移除（sidecar 如仍在运行，可用 pkill -f src/standalone/server.js 结束）"
+
+KIMI_CODE_HOME="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
+STATE_DIR="$KIMI_CODE_HOME/kimi-renamer"
+for PID_FILE in "$STATE_DIR/daemon.pid" "$STATE_DIR/sidecar.pid"; do
+  if [ -f "$PID_FILE" ]; then
+    PID="$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p; /^[0-9][0-9]*$/p' "$PID_FILE" | head -n 1)"
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+      kill "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  fi
+done
+
+echo "✅ 守护进程与 sidecar 已停止并移除"
