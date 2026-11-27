@@ -68,6 +68,30 @@ assert.strictEqual(magpieInfo.isInheritedFromDefault, false);
 setRenameModelInConfig(configPath, "Magpie/test-default-model");
 assert.strictEqual(resolveRenameModelInfo(configPath).providerType, "kimi");
 console.log("✅ Magpie 的 kimi 类型配置、rename_model 解析与模型切换测试通过");
+
+const bomFixture = "\uFEFF" + fixture.replace(/\r?\n/g, "\r\n");
+fs.writeFileSync(configPath, bomFixture, "utf8");
+setRenameModelInConfig(configPath, "Local/test-default-model");
+const bomUpdated = fs.readFileSync(configPath, "utf8");
+assert.ok(bomUpdated.startsWith("\uFEFF"), "写回后必须保留 UTF-8 BOM");
+assert.ok(!/(?<!\r)\n/.test(bomUpdated), "写回后不能出现裸 LF");
+assert.ok(bomUpdated.includes('\r\nrename_model = "Local/test-default-model"'));
+console.log("✅ UTF-8 BOM 保留测试通过");
+
+if (process.platform !== "win32") {
+  const { execFileSync } = require("child_process");
+  const fakeHome = path.join(tempDir, "home");
+  const xdgDir = path.join(tempDir, "xdg", "kimi-code");
+  fs.mkdirSync(fakeHome, { recursive: true });
+  fs.mkdirSync(xdgDir, { recursive: true });
+  fs.writeFileSync(path.join(xdgDir, "config.toml"), fixture, "utf8");
+  const env = { ...process.env, HOME: fakeHome, XDG_CONFIG_HOME: path.join(tempDir, "xdg") };
+  delete env.KIMI_CODE_HOME;
+  const script = `process.stdout.write(require(${JSON.stringify(path.resolve(__dirname, "../src/kimi-config"))}).findKimiConfigPath() || "")`;
+  const found = execFileSync(process.execPath, ["-e", script], { env, encoding: "utf8" });
+  assert.strictEqual(found, fs.realpathSync(path.join(xdgDir, "config.toml")));
+  console.log("✅ XDG_CONFIG_HOME 配置探测测试通过");
+}
 for (const [content, pattern] of [
   [fixture.replace('"Local/test-default-model"', '"missing"'), /未找到模型配置/],
   [fixture.replace('provider = "Local"', 'provider = "missing"'), /未找到供应商配置/],

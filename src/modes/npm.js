@@ -270,13 +270,14 @@ function applyPatch(kimiDir, options = {}) {
 
   // 2. 修改 dist-web/index.html
   if (!htmlContent.includes(SCRIPT_INJECTION)) {
+    const eol = htmlContent.includes("\r\n") ? "\r\n" : "\n";
     if (htmlContent.includes('<script src="/boot.js"></script>')) {
       htmlContent = htmlContent.replace(
         '<script src="/boot.js"></script>',
-        `<script src="/boot.js"></script>\n    ${SCRIPT_INJECTION}`
+        `<script src="/boot.js"></script>${eol}    ${SCRIPT_INJECTION}`
       );
     } else {
-      htmlContent = htmlContent.replace("</head>", `  ${SCRIPT_INJECTION}\n  </head>`);
+      htmlContent = htmlContent.replace("</head>", `  ${SCRIPT_INJECTION}${eol}  </head>`);
     }
     fs.writeFileSync(indexHtml, htmlContent, "utf8");
   }
@@ -285,6 +286,13 @@ function applyPatch(kimiDir, options = {}) {
   fs.writeFileSync(mainMjs, patchedMain, "utf8");
 
   return { success: true, mode: "npm", targetDir: kimiDir, modelInfo };
+}
+
+function removeScriptInjection(content) {
+  const injectedLine = /^[ \t]*<script src="\/kimi-renamer\.js"><\/script>[ \t]*\r?\n/m;
+  return injectedLine.test(content)
+    ? content.replace(injectedLine, "")
+    : content.replace(SCRIPT_INJECTION, "");
 }
 
 /**
@@ -312,10 +320,10 @@ function restorePatch(kimiDir) {
     fs.unlinkSync(htmlBak);
     restoredAny = true;
   } else if (fs.existsSync(indexHtml)) {
-    let content = fs.readFileSync(indexHtml, "utf8");
-    if (content.includes(SCRIPT_INJECTION)) {
-      content = content.replace(SCRIPT_INJECTION, "");
-      fs.writeFileSync(indexHtml, content, "utf8");
+    const content = fs.readFileSync(indexHtml, "utf8");
+    const stripped = removeScriptInjection(content);
+    if (stripped !== content) {
+      fs.writeFileSync(indexHtml, stripped, "utf8");
       restoredAny = true;
     }
   }

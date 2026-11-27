@@ -452,13 +452,14 @@ function applyPatch(webDir, options = {}) {
 
   let injected = htmlContent;
   if (!injected.includes(SCRIPT_TAG)) {
+    const eol = injected.includes("\r\n") ? "\r\n" : "\n";
     if (injected.includes('<script src="/boot.js"></script>')) {
       injected = injected.replace(
         '<script src="/boot.js"></script>',
-        `<script src="/boot.js"></script>\n    ${SCRIPT_TAG}`
+        `<script src="/boot.js"></script>${eol}    ${SCRIPT_TAG}`
       );
     } else {
-      injected = injected.replace("</head>", `  ${SCRIPT_TAG}\n  </head>`);
+      injected = injected.replace("</head>", `  ${SCRIPT_TAG}${eol}  </head>`);
     }
   }
 

@@ -96,6 +96,26 @@ const restoredHtml = fs.readFileSync(path.join(tempDir, "dist-web", "index.html"
 assert.strictEqual(restoredHtml.trim(), initialHtml.trim());
 console.log("✅ 4. 一键还原 Restore 校验通过");
 
+// 5. CRLF 文件注入与还原
+const crlfHtml = initialHtml.replace(/\r?\n/g, "\r\n");
+const crlfMain = initialMainMjs.replace(/\r?\n/g, "\r\n");
+const indexHtml = path.join(tempDir, "dist-web", "index.html");
+const mainMjs = path.join(tempDir, "dist", "main.mjs");
+fs.writeFileSync(indexHtml, crlfHtml, "utf8");
+fs.writeFileSync(mainMjs, crlfMain, "utf8");
+applyPatch(tempDir, { configPath: mockConfigTomlPath });
+assert.ok(!/(?<!\r)\n/.test(fs.readFileSync(indexHtml, "utf8")), "注入后不应混入裸 LF");
+restorePatch(tempDir);
+assert.strictEqual(fs.readFileSync(indexHtml, "utf8"), crlfHtml);
+
+// 6. 缺少 html 备份时仍能精确移除注入行
+applyPatch(tempDir, { configPath: mockConfigTomlPath });
+fs.unlinkSync(indexHtml + ".renamer.bak");
+restorePatch(tempDir);
+assert.strictEqual(fs.readFileSync(indexHtml, "utf8"), crlfHtml);
+assert.strictEqual(fs.readFileSync(mainMjs, "utf8"), crlfMain);
+console.log("✅ 5. CRLF 注入与无备份还原校验通过");
+
 // 清理测试目录
 console.log("\n🎉 所有测试均已顺利通过！Patcher 与 config.toml 联动 100% 稳健！\n");
 } finally {

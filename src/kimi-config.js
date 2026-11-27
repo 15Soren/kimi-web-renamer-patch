@@ -53,13 +53,19 @@ function findKimiConfigPath(customPath, homeOverride) {
       ? path.join(kimiHome(), "config.toml")
       : path.join(homeOverride, ".kimi-code", "config.toml"),
     path.join(homedir, ".kimi", "config.toml"),
-    path.join(homedir, ".config", "kimi-code", "config.toml"),
   ];
+  if (useCurrentEnv && process.env.XDG_CONFIG_HOME && path.isAbsolute(process.env.XDG_CONFIG_HOME)) {
+    candidates.push(path.join(process.env.XDG_CONFIG_HOME, "kimi-code", "config.toml"));
+  }
+  candidates.push(path.join(homedir, ".config", "kimi-code", "config.toml"));
   if (process.platform === "win32") {
     const appData = useCurrentEnv
       ? process.env.APPDATA || path.join(homedir, "AppData", "Roaming")
       : path.join(homedir, "AppData", "Roaming");
     candidates.push(path.join(appData, "kimi-code", "config.toml"));
+    if (useCurrentEnv && process.env.ProgramData && path.isAbsolute(process.env.ProgramData)) {
+      candidates.push(path.join(process.env.ProgramData, ".kimi-code", "config.toml"));
+    }
   } else if (!homeOverride) {
     const sudoHome = sudoUserHome();
     if (sudoHome && !isSamePath(sudoHome, currentHome)) {
@@ -282,7 +288,9 @@ function setRenameModelInConfig(configPath, newModelId) {
     throw new Error(`模型 ID 不在配置中: ${newModelId}`);
   }
   resolveRenameModelInfo(configPath, newModelId);
-  const original = fs.readFileSync(configPath, "utf8");
+  const raw = fs.readFileSync(configPath, "utf8");
+  const bom = raw.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const original = raw.slice(bom.length);
   const firstSection = original.search(/^[ \t]*\[/m);
   const suffix = firstSection === -1 ? "" : original.slice(firstSection);
   let content = firstSection === -1 ? original : original.slice(0, firstSection);
@@ -309,7 +317,7 @@ function setRenameModelInConfig(configPath, newModelId) {
     }
   }
 
-  fs.writeFileSync(configPath, content + suffix, "utf8");
+  fs.writeFileSync(configPath, bom + content + suffix, "utf8");
   return true;
 }
 
