@@ -9,7 +9,7 @@
 - 补丁工具需要 Node.js 18 或以上；被补丁的 Web 服务运行环境也需要内置 `fetch` 和 `AbortSignal.timeout`。
 - 自动查找 npm 全局安装目录、可执行文件路径及常见安装位置；支持 `--path` 手动指定目录。
 - 默认查找 `~/.kimi-code/config.toml`、`~/.kimi/config.toml` 和 `~/.config/kimi-code/config.toml`，支持 `--config`。
-- 仅支持提供 `base_url` 和 `api_key`（或 `api_key_env`）的 OpenAI Chat Completions 兼容供应商。托管 OAuth 登录、Anthropic、Responses 等接口暂不支持。
+- 支持提供 `base_url` 和 `api_key`（或 `api_key_env`）的 OpenAI Chat Completions 兼容供应商，配置类型可以是 `openai`、`openai_legacy` 或 `kimi`。Magpie 管理的兼容接口可保留 `type = "kimi"`，无需为重命名单独修改供应商类型。托管 OAuth 登录、Anthropic、Responses 等接口暂不支持。
 - 配置解析支持单行字符串、布尔值、数字、表、行尾注释及 Unicode 名称；不是完整 TOML 解析器，多行字符串、内联表等语法不在支持范围内。
 - 安装目录必须包含 `dist/main.mjs` 和 `dist-web/index.html`；服务端必须包含 `registerConfigRoutes(apiV1, core);`。不满足时会在写入前报错。
 - 前端依赖现有 Kimi Web 的会话路径、页面选择器和 API；没有覆盖所有 Kimi Code 版本。跨平台测试验证的是补丁工具与模拟文件，不代表所有浏览器和上游版本都已实测。

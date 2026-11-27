@@ -3,7 +3,15 @@ const path = require("path");
 const os = require("os");
 
 const DEFAULT_SYSTEM_PROMPT =
-  "你是一个专业的对话标题生成助手。根据用户对话的第一条消息，提炼一个简短、精准的主题标题。\n【严格限定】\n1. 长度在4-12个字之间，言简意赅。\n2. 严禁出现书名号、引号、句号等标点符号。\n3. 严禁输出任何解释、思考过程、前缀说明或多余文字。\n4. 只能且仅输出最终标题本身。";
+  "你是一个快速、精准的对话标题生成助手。请根据用户对话的第一条消息，快速直接地提炼一个简短主题标题。\n" +
+  "【严格限定】\n" +
+  "1. 快速直出：必须立即直接给出结果，不要进行复杂推理、展开分析或过度思考。\n" +
+  "2. 禁止工具：严禁调用任何工具、函数、联网搜索或外部查询，只能仅凭当前消息内容直接生成。\n" +
+  "3. 生词适配：遇到不认识的词、缩写、专有名词、项目名、库名、命令或代码标识时，先结合上下文猜测其属性（如工具、库、项目、命令、报错或概念等），再将原词原样保留，不要强行翻译、改写或编造含义，直接结合用户意图生成标题。\n" +
+  "4. 长度在4-12个字之间，言简意赅。\n" +
+  "5. 严禁出现书名号、引号、句号等标点符号。\n" +
+  "6. 严禁输出任何解释、思考过程、前缀说明或多余文字。\n" +
+  "7. 只能且仅输出最终标题本身。";
 
 /**
  * 跨平台查找 Kimi Code 的 config.toml 路径
@@ -158,8 +166,8 @@ function resolveRenameModelInfo(configPath, overrideModelId) {
   if (!providerEntry) {
     throw new Error(`未找到供应商配置: ${providerName || "未指定"}，托管登录认证暂不支持，请配置 OpenAI 兼容供应商`);
   }
-  if (providerEntry.type && !["openai", "openai_legacy"].includes(providerEntry.type)) {
-    throw new Error(`不支持的供应商类型: ${providerEntry.type}，目前仅支持 OpenAI Chat Completions 兼容接口`);
+  if (providerEntry.type && !["openai", "openai_legacy", "kimi"].includes(providerEntry.type)) {
+    throw new Error(`不支持的供应商类型: ${providerEntry.type}，支持 openai、openai_legacy 和 kimi 类型的 OpenAI Chat Completions 兼容接口`);
   }
 
   // 4. 组装实际调用的模型名与 Endpoint

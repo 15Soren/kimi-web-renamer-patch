@@ -15,26 +15,57 @@
     const style = document.createElement("style");
     style.id = "kimi-renamer-style";
     style.textContent = `
-      /* 标题栏专属图标按钮样式：与原生按钮自适应贴合 */
-      .kimi-renamer-header-btn {
-        margin-left: 4px;
+      /* 标题栏专属图标按钮样式：无边框轻量化贴合原生标题栏 */
+      #kimi-renamer-header-btn.kimi-renamer-header-btn {
+        margin: 0 0 0 4px;
+        padding: 0;
+        width: 28px;
+        height: 28px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
+        flex-shrink: 0;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        box-shadow: none;
+        outline: none;
+        appearance: none;
+        -webkit-appearance: none;
+        color: inherit;
         cursor: pointer;
         user-select: none;
-        transition: transform 0.15s ease, opacity 0.15s ease;
-        padding: 4px;
-        border-radius: 6px;
+        -webkit-tap-highlight-color: transparent;
+        transition: background-color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
       }
-      .kimi-renamer-header-btn:hover {
-        transform: scale(1.08);
+      #kimi-renamer-header-btn.kimi-renamer-header-btn.kimi-renamer-header-btn--lg {
+        width: 32px;
+        height: 32px;
       }
-      .kimi-renamer-header-btn.loading {
+      #kimi-renamer-header-btn.kimi-renamer-header-btn:hover {
+        background: rgba(128, 128, 128, 0.12);
+        transform: scale(1.05);
+      }
+      #kimi-renamer-header-btn.kimi-renamer-header-btn:active {
+        background: rgba(128, 128, 128, 0.18);
+        transform: scale(0.96);
+      }
+      #kimi-renamer-header-btn.kimi-renamer-header-btn:focus {
+        border: none;
+        outline: none;
+        box-shadow: none;
+      }
+      #kimi-renamer-header-btn.kimi-renamer-header-btn:focus-visible {
+        border: none;
+        outline: none;
+        box-shadow: none;
+        background: rgba(128, 128, 128, 0.14);
+      }
+      #kimi-renamer-header-btn.kimi-renamer-header-btn.loading {
         opacity: 0.5;
         pointer-events: none;
       }
-      .kimi-renamer-header-btn.loading .kimi-renamer-icon {
+      #kimi-renamer-header-btn.kimi-renamer-header-btn.loading .kimi-renamer-icon {
         animation: kimi-renamer-spin 0.8s linear infinite;
       }
       .kimi-renamer-icon {
@@ -42,6 +73,7 @@
         height: 16px;
         display: block;
         object-fit: contain;
+        border: none;
         border-radius: 2px;
         pointer-events: none;
       }
@@ -279,6 +311,20 @@
     }
   }
 
+  function createHeaderButton(extraClass = "") {
+    const btn = document.createElement("button");
+    btn.id = "kimi-renamer-header-btn";
+    btn.className = extraClass
+      ? `kimi-renamer-header-btn ${extraClass}`
+      : "kimi-renamer-header-btn";
+    btn.type = "button";
+    btn.title = "rename";
+    btn.setAttribute("aria-label", "rename");
+    btn.innerHTML = `<img class="kimi-renamer-icon" src="/kimi-renamer.ico" alt="rename" />`;
+    btn.addEventListener("click", () => handleAutoRename(btn));
+    return btn;
+  }
+
   // 10. 仅自适应挂载到标题栏设置按钮后面 (宽屏 chat-header + 窄屏 topbar 全适配)
   function mountHeaderButton() {
     injectStyles();
@@ -300,15 +346,7 @@
         chatHeader.querySelector(".ch-act-more") ||
         chatHeader.querySelector('button[aria-label="选项"]');
       const titleEl = chatHeader.querySelector(".ch-id");
-
-      const btn = document.createElement("button");
-      btn.id = "kimi-renamer-header-btn";
-      btn.className = "ui-icon-button ui-icon-button--md kimi-renamer-header-btn";
-      btn.type = "button";
-      btn.title = "rename";
-      btn.setAttribute("aria-label", "rename");
-      btn.innerHTML = `<img class="kimi-renamer-icon" src="/kimi-renamer.ico" alt="rename" />`;
-      btn.addEventListener("click", () => handleAutoRename(btn));
+      const btn = createHeaderButton();
 
       if (moreBtn && moreBtn.parentElement === chatHeader) {
         moreBtn.insertAdjacentElement("afterend", btn);
@@ -325,15 +363,7 @@
     if (topbar) {
       const settingBtn = topbar.querySelector('button[aria-label="会话设置"]');
       const titleBtn = topbar.querySelector(".tb-main");
-
-      const btn = document.createElement("button");
-      btn.id = "kimi-renamer-header-btn";
-      btn.className = "ui-icon-button ui-icon-button--lg kimi-renamer-header-btn";
-      btn.type = "button";
-      btn.title = "rename";
-      btn.setAttribute("aria-label", "rename");
-      btn.innerHTML = `<img class="kimi-renamer-icon" src="/kimi-renamer.ico" alt="rename" />`;
-      btn.addEventListener("click", () => handleAutoRename(btn));
+      const btn = createHeaderButton("kimi-renamer-header-btn--lg");
 
       if (settingBtn && settingBtn.parentElement === topbar) {
         settingBtn.insertAdjacentElement("afterend", btn);

@@ -35,6 +35,10 @@ async function main() {
     const script = fs.readFileSync(path.join(tempDir, "dist-web", "kimi-renamer.js"), "utf8");
     assert.ok(!script.includes(config.apiKey));
     assert.ok(!script.includes(config.endpoint));
+    assert.ok(!script.includes("ui-icon-button"), "不应携带宿主边框按钮类名");
+    assert.match(script, /border:\s*none;/, "按钮样式应显式去除边框");
+    assert.match(script, /background:\s*transparent;/, "按钮默认背景应透明");
+    assert.match(script, /outline:\s*none;/, "按钮样式应去除焦点外框");
     new vm.Script(script);
     const browserRequests = [];
     const nativeButton = { innerText: "重命名", className: "native", remove() { throw new Error("不能删除原生重命名按钮"); } };

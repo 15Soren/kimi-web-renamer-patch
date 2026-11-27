@@ -25,6 +25,9 @@ const modelInfo = resolveRenameModelInfo(configPath);
 assert.ok(modelInfo.targetModelId, "必须解析出 targetModelId");
 assert.ok(modelInfo.actualModel, "必须解析出 actualModel");
 assert.ok(modelInfo.endpoint, "必须解析出 endpoint");
+assert.match(modelInfo.systemPrompt, /快速/, "默认提示词应包含快速输出要求");
+assert.match(modelInfo.systemPrompt, /严禁调用任何工具/, "默认提示词应禁止调用任何工具");
+assert.match(modelInfo.systemPrompt, /猜测其属性.*原样保留/, "默认提示词应包含生词猜测属性后原样保留规则");
 
 console.log("✅ 2. 模型信息解析成功:");
 console.log("   - 目标模型 ID:", modelInfo.targetModelId);
@@ -51,6 +54,20 @@ assert.ok(updated.includes('# default\r\n'));
 assert.strictEqual(resolveRenameModelInfo(configPath).isInheritedFromDefault, false);
 assert.throws(() => setRenameModelInConfig(configPath, "missing"), /模型 ID 不在配置中/);
 assert.strictEqual(fs.readFileSync(configPath, "utf8"), updated);
+const magpieConfig = 'rename_model = "Magpie/test-default-model"\n' + fixture
+  .replace(/Local/g, "Magpie")
+  .replace('type = "openai"', 'type = "kimi"');
+fs.writeFileSync(configPath, magpieConfig, "utf8");
+const magpieInfo = resolveRenameModelInfo(configPath);
+assert.strictEqual(magpieInfo.providerType, "kimi");
+assert.strictEqual(magpieInfo.providerName, "Magpie");
+assert.strictEqual(magpieInfo.actualModel, modelInfo.actualModel);
+assert.strictEqual(magpieInfo.endpoint, modelInfo.endpoint);
+assert.strictEqual(magpieInfo.apiKey, modelInfo.apiKey);
+assert.strictEqual(magpieInfo.isInheritedFromDefault, false);
+setRenameModelInConfig(configPath, "Magpie/test-default-model");
+assert.strictEqual(resolveRenameModelInfo(configPath).providerType, "kimi");
+console.log("✅ Magpie 的 kimi 类型配置、rename_model 解析与模型切换测试通过");
 for (const [content, pattern] of [
   [fixture.replace('"Local/test-default-model"', '"missing"'), /未找到模型配置/],
   [fixture.replace('provider = "Local"', 'provider = "missing"'), /未找到供应商配置/],
