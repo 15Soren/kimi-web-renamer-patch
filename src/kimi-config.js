@@ -46,6 +46,10 @@ function findKimiConfigPath(customPath, homeOverride) {
     path.join(homedir, ".kimi", "config.toml"),
     path.join(homedir, ".config", "kimi-code", "config.toml"),
   ];
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA || path.join(homedir, "AppData", "Roaming");
+    candidates.push(path.join(appData, "kimi-code", "config.toml"));
+  }
 
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) {

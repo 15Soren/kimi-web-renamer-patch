@@ -58,12 +58,13 @@ function detectInstallTarget(customPath, preferredMode = releaseMeta.defaultMode
     if (npmMode && npmMode.isValidKimiDir(resolved)) {
       return { mode: "npm", targetDir: resolved };
     }
-    if (standaloneMode && standaloneMode.isValidDistWebDir(resolved)) {
-      return { mode: "standalone", targetDir: resolved };
-    }
-    const nested = path.join(resolved, "dist-web");
-    if (standaloneMode && standaloneMode.isValidDistWebDir(nested)) {
-      return { mode: "standalone", targetDir: nested };
+    if (standaloneMode) {
+      try {
+        const webDir = standaloneMode.findWebAssetsDir(resolved);
+        if (webDir) return { mode: "standalone", targetDir: webDir };
+      } catch (e) {
+        // 继续抛出统一错误
+      }
     }
     throw new Error(`指定的路径既不是有效的 npm 安装目录也不是有效的 dist-web 目录: ${resolved}`);
   }

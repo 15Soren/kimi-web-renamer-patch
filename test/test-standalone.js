@@ -49,6 +49,9 @@ async function main() {
     const detected = detectInstallTarget(newWebDir, "auto");
     assert.strictEqual(detected.mode, "standalone");
     assert.strictEqual(detected.targetDir, newWebDir);
+    const detectedFromParent = detectInstallTarget(cacheRoot, "auto");
+    assert.strictEqual(detectedFromParent.mode, "standalone");
+    assert.strictEqual(detectedFromParent.targetDir, newWebDir, "传入上级缓存目录也应自动定位到最新版本 dist-web");
     console.log("✅ 1. dist-web 目录识别、缓存版本排序与 auto 模式探测通过");
 
     // 2. 不兼容 HTML 拒绝且无副作用

@@ -15,15 +15,23 @@ function serverConfigPath() {
 }
 
 /**
- * 从 dist-web 路径反推所属用户的 home 目录：
- * <home>/.cache/kimi-code/web/<版本>/<平台>/<hash>/dist-web
+ * 从 dist-web 路径反推所属用户的 home 目录
  */
 function homeFromWebDir(webDir) {
   if (!webDir) return null;
-  const marker = `${path.sep}.cache${path.sep}kimi-code${path.sep}web${path.sep}`;
-  const index = webDir.indexOf(marker);
-  if (index <= 0) return null;
-  return webDir.slice(0, index);
+  const normalized = path.normalize(webDir);
+  const lower = normalized.toLowerCase();
+  const markers = [
+    `${path.sep}.cache${path.sep}kimi-code${path.sep}web${path.sep}`,
+    `${path.sep}.kimi-code${path.sep}`,
+    `${path.sep}appdata${path.sep}local${path.sep}`,
+    `${path.sep}appdata${path.sep}roaming${path.sep}`,
+  ];
+  for (const marker of markers) {
+    const index = lower.indexOf(marker);
+    if (index > 0) return normalized.slice(0, index);
+  }
+  return null;
 }
 
 /**
@@ -36,15 +44,43 @@ function kimiHomeForWebDir(webDir) {
 
 function listCacheRoots() {
   const override = process.env.KIMI_RENAMER_CACHE_ROOTS;
-  const roots = override
-    ? override.split(path.delimiter).filter(Boolean)
-    : [path.join(os.homedir(), ".cache", "kimi-code", "web")];
+  if (override) {
+    return [...new Set(override.split(path.delimiter).filter(Boolean))];
+  }
 
-  if (!override && process.platform === "win32" && process.env.LOCALAPPDATA) {
+  const homedir = os.homedir();
+  const home = kimiHome();
+  const roots = [];
+
+  if (process.env.XDG_CACHE_HOME) {
+    roots.push(path.join(process.env.XDG_CACHE_HOME, "kimi-code", "web"));
+  }
+
+  roots.push(
+    path.join(homedir, ".cache", "kimi-code", "web"),
+    path.join(home, "web"),
+    path.join(home, "cache", "web"),
+    path.join(home, "dist-web"),
+    path.join(home, "bin", "dist-web"),
+    path.join(home, "versions")
+  );
+
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || path.join(homedir, "AppData", "Local");
+    const appData = process.env.APPDATA || path.join(homedir, "AppData", "Roaming");
     roots.push(
-      path.join(process.env.LOCALAPPDATA, "kimi-code", "web"),
-      path.join(process.env.LOCALAPPDATA, "kimi-code", "Cache", "web")
+      path.join(localAppData, "kimi-code", "web"),
+      path.join(localAppData, "kimi-code", "Cache", "web"),
+      path.join(localAppData, "kimi-code", "dist-web"),
+      path.join(localAppData, "cache", "kimi-code", "web"),
+      path.join(localAppData, "Programs", "kimi-code"),
+      path.join(appData, "kimi-code", "web"),
+      path.join(appData, "kimi-code", "Cache", "web"),
+      path.join(appData, "kimi-code", "dist-web"),
+      path.join(os.tmpdir(), "kimi-code", "web")
     );
+  } else if (process.platform === "darwin") {
+    roots.push(path.join(homedir, "Library", "Caches", "kimi-code", "web"));
   }
 
   if (process.env.KIMI_RENAMER_ALL_USERS === "1") {

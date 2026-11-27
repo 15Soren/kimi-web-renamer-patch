@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { execSync } = require("child_process");
 const {
   findKimiConfigPath,
   resolveRenameModelInfo,
@@ -76,34 +77,130 @@ function compareVersions(a, b) {
   return 0;
 }
 
+const SKIP_SCAN_DIRS = new Set(["node_modules", ".git", "sessions", "logs", "assets"]);
+
+function extractVersionFromPath(dirPath) {
+  const segments = String(dirPath || "").split(/[\\/]+/);
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const match = segments[i].match(/^v?(\d+\.\d+(?:\.\d+)?(?:[-+].*)?)$/i);
+    if (match) return match[1];
+  }
+  return "0";
+}
+
+function getIndexMtimeMs(webDir) {
+  try {
+    return fs.statSync(path.join(webDir, "index.html")).mtimeMs || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function scanDistWebDirsFromRoot(root, maxDepth = 4) {
+  const found = [];
+  const seen = new Set();
+
+  const record = (dir) => {
+    const normalized = path.resolve(dir);
+    if (seen.has(normalized) || !isValidDistWebDir(normalized)) return;
+    seen.add(normalized);
+    found.push({
+      dir: normalized,
+      version: extractVersionFromPath(normalized),
+      mtimeMs: getIndexMtimeMs(normalized),
+    });
+  };
+
+  if (!root || !fs.existsSync(root)) return found;
+  record(root);
+
+  const walk = (current, depth) => {
+    if (depth >= maxDepth) return;
+    for (const entry of safeReaddir(current)) {
+      if (SKIP_SCAN_DIRS.has(entry)) continue;
+      const full = path.join(current, entry);
+      let stat;
+      try {
+        stat = fs.statSync(full);
+      } catch (e) {
+        continue;
+      }
+      if (!stat.isDirectory()) continue;
+      if (entry === "dist-web") {
+        record(full);
+        continue;
+      }
+      walk(full, depth + 1);
+    }
+  };
+
+  walk(root, 0);
+  return found;
+}
+
+function listBinarySiblingRoots() {
+  if (process.env.KIMI_RENAMER_CACHE_ROOTS) return [];
+  const roots = [];
+  try {
+    const cmd = process.platform === "win32" ? "where kimi" : "which kimi";
+    const lines = execSync(cmd, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    for (const binPath of lines) {
+      if (!fs.existsSync(binPath)) continue;
+      const dirs = [path.dirname(binPath)];
+      try {
+        const realDir = path.dirname(fs.realpathSync(binPath));
+        if (!dirs.includes(realDir)) dirs.push(realDir);
+      } catch (e) {
+        // 忽略无法解析符号链接的情况
+      }
+      for (const binDir of dirs) {
+        const parentDir = path.resolve(binDir, "..");
+        roots.push(
+          path.join(binDir, "dist-web"),
+          path.join(parentDir, "dist-web"),
+          path.join(parentDir, "web"),
+          path.join(parentDir, "resources", "dist-web")
+        );
+      }
+    }
+  } catch (e) {
+    // PATH 中找不到 kimi 时忽略
+  }
+  return [...new Set(roots)];
+}
+
 /**
- * 列出本机单文件安装的所有 dist-web 缓存目录，按版本从新到旧排序。
- * 单文件安装的静态资源缓存在 ~/.cache/kimi-code/web/<版本>/<平台>/<hash>/dist-web。
+ * 列出本机单文件安装的所有 dist-web 缓存/资源目录，按版本从新到旧排序。
+ * 兼容 Linux (~/.cache/kimi-code/web/...)、macOS 与 Windows (%LOCALAPPDATA% / %APPDATA% / %USERPROFILE%\.kimi-code 等)。
  */
 function listDistWebDirs() {
   const found = [];
   const seen = new Set();
-  for (const root of listCacheRoots()) {
-    for (const version of safeReaddir(root)) {
-      for (const platform of safeReaddir(path.join(root, version))) {
-        for (const hash of safeReaddir(path.join(root, version, platform))) {
-          const dir = path.join(root, version, platform, hash, "dist-web");
-          if (isValidDistWebDir(dir) && !seen.has(dir)) {
-            seen.add(dir);
-            found.push({ dir, version });
-          }
-        }
+  const roots = [...new Set([...listCacheRoots(), ...listBinarySiblingRoots()])];
+
+  for (const root of roots) {
+    for (const item of scanDistWebDirsFromRoot(root, 4)) {
+      if (!seen.has(item.dir)) {
+        seen.add(item.dir);
+        found.push(item);
       }
     }
   }
 
   return found
-    .sort((a, b) => compareVersions(b.version, a.version))
+    .sort((a, b) => compareVersions(b.version, a.version) || b.mtimeMs - a.mtimeMs)
     .map((item) => item.dir);
 }
 
 /**
- * 定位 dist-web 目录；--path 可指向 dist-web 本身或包含 dist-web 的目录
+ * 定位 dist-web 目录；--path 可指向 dist-web 本身、包含 dist-web 的目录或其上级缓存目录
  */
 function findWebAssetsDir(customPath) {
   if (customPath) {
@@ -111,6 +208,10 @@ function findWebAssetsDir(customPath) {
     if (isValidDistWebDir(resolved)) return resolved;
     const nested = path.join(resolved, "dist-web");
     if (isValidDistWebDir(nested)) return nested;
+    const scanned = scanDistWebDirsFromRoot(resolved, 4).sort(
+      (a, b) => compareVersions(b.version, a.version) || b.mtimeMs - a.mtimeMs
+    );
+    if (scanned.length > 0) return scanned[0].dir;
     throw new Error(`指定的路径不是有效的 Kimi Code Web 静态资源目录: ${resolved}`);
   }
 
