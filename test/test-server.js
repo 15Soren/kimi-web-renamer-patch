@@ -42,14 +42,15 @@ async function main() {
     const port = await listen(sidecar);
     const base = `http://127.0.0.1:${port}`;
 
-    // CORS 预检
+    // CORS 预检（含 Private Network Access）
     const preflight = await fetch(`${base}/generate`, {
       method: "OPTIONS",
       headers: { Origin: "http://127.0.0.1:58627", "Access-Control-Request-Method": "POST" },
     });
     assert.strictEqual(preflight.status, 204);
     assert.strictEqual(preflight.headers.get("access-control-allow-origin"), "*");
-    console.log("✅ 1. CORS 预检通过");
+    assert.strictEqual(preflight.headers.get("access-control-allow-private-network"), "true");
+    console.log("✅ 1. CORS 与 PNA 预检通过");
 
     // 健康检查
     const health = await fetch(`${base}/health`);

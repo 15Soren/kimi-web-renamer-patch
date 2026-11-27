@@ -1,4 +1,5 @@
 @echo off
+setlocal
 chcp 65001 >nul 2>&1
 where node >nul 2>&1
 if errorlevel 1 (
@@ -6,3 +7,4 @@ if errorlevel 1 (
   exit /b 1
 )
 node "%~dp0kimi-web-renamer" %*
+exit /b %errorlevel%

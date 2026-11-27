@@ -1,7 +1,6 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const { execSync } = require("child_process");
 const {
   findKimiConfigPath,
   resolveRenameModelInfo,
@@ -10,6 +9,9 @@ const {
   serverConfigPath,
   listCacheRoots,
   homeFromWebDir,
+  normalizePathKey,
+  uniquePaths,
+  findExecutablesInPath,
 } = require("../paths");
 
 const SCRIPT_TAG = '<script src="/kimi-renamer.js"></script>';
@@ -27,6 +29,53 @@ function readServerConfig(configPath = serverConfigPath()) {
   }
 }
 
+function writeFileAtomicUtf8(targetPath, content, mode) {
+  const dir = path.dirname(targetPath);
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(targetPath)}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`
+  );
+  try {
+    fs.writeFileSync(tmpPath, content, {
+      encoding: "utf8",
+      ...(mode ? { mode } : {}),
+    });
+    if (mode) {
+      try {
+        fs.chmodSync(tmpPath, mode);
+      } catch (e) {
+        // 某些文件系统（如 Windows）不支持 chmod
+      }
+    }
+    try {
+      fs.renameSync(tmpPath, targetPath);
+    } catch (err) {
+      if (err && (err.code === "EPERM" || err.code === "EACCES" || err.code === "EBUSY" || err.code === "EXDEV")) {
+        // Windows 目标文件瞬时被占用时回退直接覆写
+        fs.writeFileSync(targetPath, content, {
+          encoding: "utf8",
+          ...(mode ? { mode } : {}),
+        });
+      } else {
+        throw err;
+      }
+    }
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch (e) {
+      // 忽略清理失败
+    }
+  }
+  if (mode) {
+    try {
+      fs.chmodSync(targetPath, mode);
+    } catch (e) {
+      // 某些文件系统（如挂载的 Windows 盘）不支持 chmod
+    }
+  }
+}
+
 function writeServerConfig(config, configPath = serverConfigPath()) {
   const dir = path.dirname(configPath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o2770 });
@@ -35,15 +84,15 @@ function writeServerConfig(config, configPath = serverConfigPath()) {
   } catch (e) {
     // 某些文件系统（如挂载的 Windows 盘）不支持 chmod
   }
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", {
-    encoding: "utf8",
-    mode: 0o660,
-  });
+  const serialized = JSON.stringify(config, null, 2) + "\n";
   try {
-    fs.chmodSync(configPath, 0o660);
+    if (fs.existsSync(configPath) && fs.readFileSync(configPath, "utf8") === serialized) {
+      return configPath;
+    }
   } catch (e) {
-    // 某些文件系统（如挂载的 Windows 盘）不支持 chmod
+    // 无法读取旧文件时继续写入
   }
+  writeFileAtomicUtf8(configPath, serialized, 0o660);
   return configPath;
 }
 
@@ -77,7 +126,7 @@ function compareVersions(a, b) {
   return 0;
 }
 
-const SKIP_SCAN_DIRS = new Set(["node_modules", ".git", "sessions", "logs", "assets"]);
+const SKIP_SCAN_DIRS = new Set(["node_modules", ".git", "sessions", "logs", "assets", "kimi-renamer"]);
 
 function extractVersionFromPath(dirPath) {
   const segments = String(dirPath || "").split(/[\\/]+/);
@@ -96,14 +145,15 @@ function getIndexMtimeMs(webDir) {
   }
 }
 
-function scanDistWebDirsFromRoot(root, maxDepth = 4) {
+function scanDistWebDirsFromRoot(root, maxDepth = 6) {
   const found = [];
   const seen = new Set();
 
   const record = (dir) => {
     const normalized = path.resolve(dir);
-    if (seen.has(normalized) || !isValidDistWebDir(normalized)) return;
-    seen.add(normalized);
+    const key = normalizePathKey(normalized);
+    if (seen.has(key) || !isValidDistWebDir(normalized)) return;
+    seen.add(key);
     found.push({
       dir: normalized,
       version: extractVersionFromPath(normalized),
@@ -142,21 +192,14 @@ function listBinarySiblingRoots() {
   if (process.env.KIMI_RENAMER_CACHE_ROOTS) return [];
   const roots = [];
   try {
-    const cmd = process.platform === "win32" ? "where kimi" : "which kimi";
-    const lines = execSync(cmd, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    for (const binPath of lines) {
-      if (!fs.existsSync(binPath)) continue;
+    const binPaths = findExecutablesInPath("kimi");
+    for (const binPath of binPaths) {
       const dirs = [path.dirname(binPath)];
       try {
         const realDir = path.dirname(fs.realpathSync(binPath));
-        if (!dirs.includes(realDir)) dirs.push(realDir);
+        if (!dirs.some((d) => normalizePathKey(d) === normalizePathKey(realDir))) {
+          dirs.push(realDir);
+        }
       } catch (e) {
         // 忽略无法解析符号链接的情况
       }
@@ -173,7 +216,7 @@ function listBinarySiblingRoots() {
   } catch (e) {
     // PATH 中找不到 kimi 时忽略
   }
-  return [...new Set(roots)];
+  return uniquePaths(roots);
 }
 
 /**
@@ -183,12 +226,13 @@ function listBinarySiblingRoots() {
 function listDistWebDirs() {
   const found = [];
   const seen = new Set();
-  const roots = [...new Set([...listCacheRoots(), ...listBinarySiblingRoots()])];
+  const roots = uniquePaths([...listCacheRoots(), ...listBinarySiblingRoots()]);
 
   for (const root of roots) {
-    for (const item of scanDistWebDirsFromRoot(root, 5)) {
-      if (!seen.has(item.dir)) {
-        seen.add(item.dir);
+    for (const item of scanDistWebDirsFromRoot(root, 6)) {
+      const key = normalizePathKey(item.dir);
+      if (!seen.has(key)) {
+        seen.add(key);
         found.push(item);
       }
     }
@@ -208,7 +252,7 @@ function findWebAssetsDir(customPath) {
     if (isValidDistWebDir(resolved)) return resolved;
     const nested = path.join(resolved, "dist-web");
     if (isValidDistWebDir(nested)) return nested;
-    const scanned = scanDistWebDirsFromRoot(resolved, 4).sort(
+    const scanned = scanDistWebDirsFromRoot(resolved, 6).sort(
       (a, b) => compareVersions(b.version, a.version) || b.mtimeMs - a.mtimeMs
     );
     if (scanned.length > 0) return scanned[0].dir;
@@ -283,6 +327,32 @@ function alignOwnership(webDir, files) {
   }
 }
 
+function writeIfChangedUtf8(filePath, content) {
+  try {
+    if (fs.existsSync(filePath) && fs.readFileSync(filePath, "utf8") === content) {
+      return false;
+    }
+  } catch (e) {
+    // 读取失败时直接覆盖
+  }
+  fs.writeFileSync(filePath, content, "utf8");
+  return true;
+}
+
+function copyIfChanged(srcPath, destPath) {
+  try {
+    if (fs.existsSync(destPath)) {
+      const srcBuf = fs.readFileSync(srcPath);
+      const destBuf = fs.readFileSync(destPath);
+      if (srcBuf.equals(destBuf)) return false;
+    }
+  } catch (e) {
+    // 读取失败时直接覆盖
+  }
+  fs.copyFileSync(srcPath, destPath);
+  return true;
+}
+
 /**
  * 应用单文件模式补丁：注入前端脚本、写入本地 sidecar 配置
  */
@@ -291,26 +361,35 @@ function applyPatch(webDir, options = {}) {
     throw new Error("目标目录缺少 Kimi Code Web 静态文件 (index.html)");
   }
 
+  const configPath = options.serverConfigPath || serverConfigPath();
+  const previous = readServerConfig(configPath);
+
   let modelInfo;
   if (options && options.endpoint) {
     modelInfo = options;
   } else {
-    const configPath =
-      (options && options.configPath) || findKimiConfigPath(null, homeFromWebDir(webDir));
-    if (!configPath) {
+    const savedConfigPath =
+      previous && typeof previous.sourceConfigPath === "string" && fs.existsSync(previous.sourceConfigPath)
+        ? previous.sourceConfigPath
+        : null;
+    const tomlConfigPath =
+      (options && options.configPath) || savedConfigPath || findKimiConfigPath(null, homeFromWebDir(webDir));
+    if (!tomlConfigPath) {
       throw new Error("未能定位到系统的 Kimi Code 配置文件 (config.toml)");
     }
-    modelInfo = resolveRenameModelInfo(configPath, options.modelId);
+    modelInfo = resolveRenameModelInfo(tomlConfigPath, options.modelId);
   }
   modelInfo = normalizeModelInfo(modelInfo);
 
-  const port = Number(options.port || process.env.KIMI_RENAMER_PORT || DEFAULT_PORT);
+  const rawPort =
+    options.port !== undefined && options.port !== null
+      ? options.port
+      : process.env.KIMI_RENAMER_PORT || (previous && previous.port) || DEFAULT_PORT;
+  const port = Number(rawPort);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`无效的 sidecar 端口: ${options.port}`);
+    throw new Error(`无效的 sidecar 端口: ${rawPort}`);
   }
 
-  const configPath = options.serverConfigPath || serverConfigPath();
-  const previous = readServerConfig(configPath);
   const token = previous && previous.token ? previous.token : crypto.randomBytes(24).toString("hex");
 
   const serverConfig = {
@@ -324,6 +403,7 @@ function applyPatch(webDir, options = {}) {
     host: options.host || (previous && previous.host) || DEFAULT_HOST,
     port,
     token,
+    ...(modelInfo.configPath ? { sourceConfigPath: modelInfo.configPath } : {}),
   };
 
   const indexHtml = path.join(webDir, "index.html");
@@ -338,10 +418,10 @@ function applyPatch(webDir, options = {}) {
   }
 
   if (!fs.existsSync(htmlBak)) {
-    fs.copyFileSync(indexHtml, htmlBak);
+    fs.writeFileSync(htmlBak, htmlContent, "utf8");
   } else if (!htmlContent.includes(SCRIPT_TAG)) {
     // 原版文件已被 kimi web 更新或还原，刷新备份
-    fs.copyFileSync(indexHtml, htmlBak);
+    writeIfChangedUtf8(htmlBak, htmlContent);
   } else {
     // 重复应用时总是从原版备份出发，避免重复注入
     htmlContent = fs.readFileSync(htmlBak, "utf8");
@@ -358,21 +438,19 @@ function applyPatch(webDir, options = {}) {
       injected = injected.replace("</head>", `  ${SCRIPT_TAG}\n  </head>`);
     }
   }
-  fs.writeFileSync(indexHtml, injected, "utf8");
 
   const template = fs.readFileSync(path.join(__dirname, "..", "template", "kimi-renamer.js"), "utf8");
   const frontendConfig = JSON.stringify({ mode: "sidecar", port, token });
-  fs.writeFileSync(
-    path.join(webDir, RENAMER_JS_NAME),
-    template.replace("__CONFIG_PLACEHOLDER__", () => frontendConfig),
-    "utf8"
-  );
-  fs.copyFileSync(
+  const renderedJs = template.replace("__CONFIG_PLACEHOLDER__", () => frontendConfig);
+
+  // 先写静态脚本、图标与 sidecar 配置，最后更新 index.html，确保浏览器加载时所有资源已就绪
+  writeIfChangedUtf8(path.join(webDir, RENAMER_JS_NAME), renderedJs);
+  copyIfChanged(
     path.join(__dirname, "..", "assets", "Kimi.ico"),
     path.join(webDir, RENAMER_ICO_NAME)
   );
-
   writeServerConfig(serverConfig, configPath);
+  writeIfChangedUtf8(indexHtml, injected);
 
   alignOwnership(webDir, [
     indexHtml,
@@ -409,11 +487,9 @@ function restorePatch(webDir, options = {}) {
   } else if (fs.existsSync(indexHtml)) {
     const content = fs.readFileSync(indexHtml, "utf8");
     if (content.includes(SCRIPT_TAG)) {
-      fs.writeFileSync(
-        indexHtml,
-        content.replace(`    ${SCRIPT_TAG}\n`, "").replace(`  ${SCRIPT_TAG}\n`, "").replace(SCRIPT_TAG, ""),
-        "utf8"
-      );
+      const cleaned = content
+        .replace(new RegExp(`[ \\t]*${SCRIPT_TAG.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\r?\\n?`, "g"), "");
+      fs.writeFileSync(indexHtml, cleaned, "utf8");
       restoredAny = true;
     }
   }

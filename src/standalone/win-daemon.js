@@ -4,7 +4,8 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn, spawnSync } = require("child_process");
-const { renamerStateDir } = require("../paths");
+const { renamerStateDir, daemonPidPath, sidecarPidPath } = require("../paths");
+const { readServerConfig } = require("../modes/standalone");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const DAEMON_JS = path.join(ROOT, "src", "standalone", "daemon.js");
@@ -25,18 +26,31 @@ function escapeVbsString(str) {
 
 /**
  * 生成静默启动 daemon.js 的 VBScript 内容（返回 UTF-16LE + BOM Buffer，避免中文用户名乱码）
+ * 附带文件存在性判断与静默错误兜底，避免目录移动/卸载 Node 后开机弹出 WScript 报错框
  */
 function buildStartupVbsBuffer(nodeExe = process.execPath, daemonJs = DAEMON_JS) {
   const cmd = `"${nodeExe}" "${daemonJs}"`;
-  const script = `CreateObject("WScript.Shell").Run "${escapeVbsString(cmd)}", 0, False\r\n`;
+  const lines = [
+    "On Error Resume Next",
+    'Set fso = CreateObject("Scripting.FileSystemObject")',
+    `If fso.FileExists("${escapeVbsString(nodeExe)}") And fso.FileExists("${escapeVbsString(daemonJs)}") Then`,
+    `  CreateObject("WScript.Shell").Run "${escapeVbsString(cmd)}", 0, False`,
+    "End If",
+    "",
+  ];
+  const script = lines.join("\r\n");
   return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(script, "utf16le")]);
 }
 
-function stopRunningDaemons() {
-  if (process.platform !== "win32") return;
-  const psScript = [
-    "Get-CimInstance Win32_Process | Where-Object {",
-    `  $_.Name -eq 'node.exe' -and $_.ProcessId -ne ${process.pid} -and (`,
+/**
+ * 构造用于停止残留 daemon.js / server.js 进程的合法 PowerShell 脚本
+ */
+function buildStopProcessesScript(excludePid = process.pid) {
+  const safePid = Number.isInteger(excludePid) ? excludePid : 0;
+  return [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object {",
+    `  $_.ProcessId -ne ${safePid} -and $_.CommandLine -and (`,
     "    $_.CommandLine -like '*src\\standalone\\daemon.js*' -or",
     "    $_.CommandLine -like '*src/standalone/daemon.js*' -or",
     "    $_.CommandLine -like '*src\\standalone\\server.js*' -or",
@@ -45,12 +59,73 @@ function stopRunningDaemons() {
     "} | ForEach-Object {",
     "  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue",
     "}",
-  ].join("; ");
+  ].join("\n");
+}
 
-  spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", psScript], {
-    windowsHide: true,
-    stdio: "ignore",
-  });
+function killPidFromFile(pidFile, excludePid = process.pid) {
+  let pid = null;
+  try {
+    const raw = fs.readFileSync(pidFile, "utf8").trim();
+    if (raw.startsWith("{")) {
+      const parsed = JSON.parse(raw);
+      pid = Number(parsed.pid);
+    } else if (raw) {
+      pid = Number(raw);
+    }
+  } catch (e) {
+    return false;
+  }
+
+  let killed = false;
+  if (Number.isInteger(pid) && pid > 0 && pid !== excludePid) {
+    try {
+      process.kill(pid);
+      killed = true;
+    } catch (e) {
+      // 进程已不存在
+    }
+  }
+  try {
+    if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile);
+  } catch (e) {
+    // 忽略清理失败
+  }
+  return killed;
+}
+
+function waitBriefly(ms) {
+  const sab = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(sab), 0, 0, ms);
+}
+
+function stopRunningDaemons() {
+  if (process.platform !== "win32") return { ok: true };
+
+  // 1. 优先根据 PID 文件精准结束
+  killPidFromFile(daemonPidPath());
+  killPidFromFile(sidecarPidPath());
+
+  // 2. 用合法的 PowerShell 命令行匹配兜底清理所有残留 daemon.js / server.js
+  const psScript = buildStopProcessesScript(process.pid);
+  const res = spawnSync(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", psScript],
+    {
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 15000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+
+  // 给系统短暂时间释放进程句柄与端口
+  waitBriefly(250);
+
+  if (res.error || res.status !== 0) {
+    const detail = (res.stderr || (res.error && res.error.message) || "").trim();
+    return { ok: false, error: detail || `PowerShell 退出码: ${res.status}` };
+  }
+  return { ok: true };
 }
 
 function installDaemon(options = {}) {
@@ -63,19 +138,28 @@ function installDaemon(options = {}) {
   fs.mkdirSync(startupDir, { recursive: true });
   fs.writeFileSync(vbsPath, buildStartupVbsBuffer(nodeExe, daemonJs));
 
+  let spawnedPid = null;
+  let stopWarning = null;
   if (!options.skipSpawn) {
-    stopRunningDaemons();
+    const stopRes = stopRunningDaemons();
+    if (!stopRes.ok) {
+      stopWarning = stopRes.error;
+    }
     const child = spawn(nodeExe, [daemonJs], {
       detached: true,
       windowsHide: true,
       stdio: "ignore",
     });
+    spawnedPid = child.pid || null;
     child.unref();
   }
 
   return {
     vbsPath,
     logPath: path.join(renamerStateDir(), "daemon.log"),
+    pid: spawnedPid,
+    stopWarning,
+    hasServerConfig: Boolean(readServerConfig()),
   };
 }
 
@@ -87,10 +171,11 @@ function uninstallDaemon(options = {}) {
     fs.unlinkSync(vbsPath);
     removedVbs = true;
   }
+  let stopResult = { ok: true };
   if (!options.skipStop) {
-    stopRunningDaemons();
+    stopResult = stopRunningDaemons();
   }
-  return { vbsPath, removedVbs };
+  return { vbsPath, removedVbs, stopOk: stopResult.ok, stopError: stopResult.error || null };
 }
 
 function isExplorerDoubleClick(env = process.env) {
@@ -117,9 +202,23 @@ async function main() {
     console.log("✅ 守护进程已安装并启动（已加入开机自启）");
     console.log(`   自启脚本: ${res.vbsPath}`);
     console.log(`   运行日志: ${res.logPath}`);
+    if (res.pid) {
+      console.log(`   进程 PID: ${res.pid}`);
+    }
+    if (res.stopWarning) {
+      console.warn(`⚠️  清理旧进程时出现警告: ${res.stopWarning}`);
+    }
+    if (!res.hasServerConfig) {
+      console.warn("\n⚠️  提示: 尚未检测到 sidecar 配置 (server.json)，请先运行一次补丁命令：");
+      console.warn(`   node "${path.join(ROOT, "bin", "cli.js")}" patch`);
+    }
   } else if (action === "uninstall") {
     const res = uninstallDaemon();
-    console.log("✅ 守护进程与 sidecar 已停止，并移除开机自启");
+    if (res.stopOk) {
+      console.log("✅ 守护进程与 sidecar 已停止，并移除开机自启");
+    } else {
+      console.warn(`⚠️  已移除开机自启，但停止后台进程时出现异常: ${res.stopError}`);
+    }
     if (res.removedVbs) {
       console.log(`   已删除: ${res.vbsPath}`);
     }
@@ -136,6 +235,8 @@ module.exports = {
   getVbsPath,
   escapeVbsString,
   buildStartupVbsBuffer,
+  buildStopProcessesScript,
+  stopRunningDaemons,
   installDaemon,
   uninstallDaemon,
   isExplorerDoubleClick,

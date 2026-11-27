@@ -47,8 +47,14 @@ for (let i = 0; i < args.length; i++) {
     }
     if (arg === "--path") customPath = value;
     else if (arg === "--config") customConfigPath = value;
-    else if (arg === "--port") customPort = Number(value);
-    else requestedMode = value.toLowerCase();
+    else if (arg === "--port") {
+      const parsedPort = Number(value);
+      if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
+        console.error(`❌ 无效的 --port 参数: ${value}，必须为 1-65535 的整数`);
+        process.exit(1);
+      }
+      customPort = parsedPort;
+    } else requestedMode = value.toLowerCase();
   } else if (arg === "-h" || arg === "--help") {
     continue;
   } else if (arg.startsWith("-")) {
@@ -97,7 +103,12 @@ async function main() {
     const shownHost = started.host === "0.0.0.0" ? "127.0.0.1" : started.host;
     console.log(`✅ sidecar 已启动: http://${shownHost}:${started.port}/ (监听 ${started.host})`);
     console.log(`🤖 使用模型: ${started.config.model}`);
-    const shutdown = () => started.server.close(() => process.exit(0));
+    const shutdown = () => {
+      if (typeof started.server.closeAllConnections === "function") {
+        started.server.closeAllConnections();
+      }
+      started.server.close(() => process.exit(0));
+    };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);
     return;

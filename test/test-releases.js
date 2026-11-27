@@ -11,8 +11,12 @@ function main() {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "kimi-releases-test-"));
   try {
     const outDir = path.join(tempDir, "releases");
-    const built = buildReleases({ outDir, archive: false });
+    const built = buildReleases({ outDir, archive: true });
     assert.strictEqual(built.built.length, 2);
+    assert.ok(
+      built.archives.some((f) => f.endsWith(".zip")),
+      "Release 归档构建应生成 .zip 文件（含 Windows 兜底）"
+    );
 
     const npmDir = path.join(outDir, "kimi-web-renamer-patch-npm");
     const standaloneDir = path.join(outDir, "kimi-web-renamer-patch-standalone");

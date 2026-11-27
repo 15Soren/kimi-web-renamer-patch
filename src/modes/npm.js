@@ -6,6 +6,7 @@ const {
   findKimiConfigPath,
   resolveRenameModelInfo,
 } = require("../kimi-config");
+const { findExecutablesInPath } = require("../paths");
 
 // 标记常量
 const SCRIPT_INJECTION = '<script src="/kimi-renamer.js"></script>';
@@ -96,6 +97,7 @@ function findKimiCodePath(customPath) {
   try {
     const npmGlobalRoot = execSync("npm root -g", {
       encoding: "utf8",
+      windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
     if (npmGlobalRoot) {
@@ -106,22 +108,20 @@ function findKimiCodePath(customPath) {
     // 忽略并在后续方式中重试
   }
 
-  // 2. 尝试通过 which / where kimi 定位
+  // 2. 尝试通过 PATH 中的 kimi 定位（纯 Node.js 查找，避免 Windows 弹出控制台窗口）
   try {
-    const isWin = process.platform === "win32";
-    const lookupCmd = isWin ? "where kimi" : "which kimi";
-    const binPath = execSync(lookupCmd, {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).split(/\r?\n/)[0].trim();
-    if (binPath && fs.existsSync(binPath)) {
+    for (const binPath of findExecutablesInPath("kimi")) {
       const binDir = path.dirname(binPath);
       const candidate1 = path.join(binDir, "node_modules", "@moonshot-ai", "kimi-code");
       if (isValidKimiDir(candidate1)) return candidate1;
 
-      const realBin = fs.realpathSync(binPath);
-      const candidate2 = path.resolve(path.dirname(realBin), "..");
-      if (isValidKimiDir(candidate2)) return candidate2;
+      try {
+        const realBin = fs.realpathSync(binPath);
+        const candidate2 = path.resolve(path.dirname(realBin), "..");
+        if (isValidKimiDir(candidate2)) return candidate2;
+      } catch (e) {
+        // 忽略无法解析的符号链接
+      }
     }
   } catch (e) {
     // 忽略

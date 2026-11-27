@@ -27,6 +27,13 @@ function stripTitle(raw) {
   return title;
 }
 
+function isSamePath(a, b) {
+  if (!a || !b) return false;
+  const na = path.resolve(a);
+  const nb = path.resolve(b);
+  return process.platform === "win32" ? na.toLowerCase() === nb.toLowerCase() : na === nb;
+}
+
 /**
  * 跨平台查找 Kimi Code 的 config.toml 路径。
  * 传入 homeOverride 时按该用户自己的 ~/.kimi-code 查找（多用户守护进程使用）。
@@ -38,16 +45,20 @@ function findKimiConfigPath(customPath, homeOverride) {
     throw new Error(`指定的配置文件不存在: ${resolved}`);
   }
 
-  const homedir = homeOverride || os.homedir();
+  const currentHome = os.homedir();
+  const useCurrentEnv = !homeOverride || isSamePath(homeOverride, currentHome);
+  const homedir = useCurrentEnv ? currentHome : homeOverride;
   const candidates = [
-    homeOverride
-      ? path.join(homeOverride, ".kimi-code", "config.toml")
-      : path.join(kimiHome(), "config.toml"),
+    useCurrentEnv
+      ? path.join(kimiHome(), "config.toml")
+      : path.join(homeOverride, ".kimi-code", "config.toml"),
     path.join(homedir, ".kimi", "config.toml"),
     path.join(homedir, ".config", "kimi-code", "config.toml"),
   ];
   if (process.platform === "win32") {
-    const appData = process.env.APPDATA || path.join(homedir, "AppData", "Roaming");
+    const appData = useCurrentEnv
+      ? process.env.APPDATA || path.join(homedir, "AppData", "Roaming")
+      : path.join(homedir, "AppData", "Roaming");
     candidates.push(path.join(appData, "kimi-code", "config.toml"));
   }
 

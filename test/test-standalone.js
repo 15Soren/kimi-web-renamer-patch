@@ -202,7 +202,88 @@ async function main() {
     const uninstalled = winDaemon.uninstallDaemon({ env: winEnv, skipStop: true });
     assert.strictEqual(uninstalled.removedVbs, true);
     assert.ok(!fs.existsSync(installed.vbsPath));
-    console.log("✅ 7. Windows 守护进程安装/卸载模块与 UTF-16LE 自启脚本校验通过");
+    assert.ok(vbsText.includes("On Error Resume Next"), "VBS 应包含静默错误兜底");
+    assert.ok(vbsText.includes("FileExists"), "VBS 应校验文件存在避免移动目录后开机弹窗");
+
+    // 校验 PowerShell 停止脚本语法合法性（修复之前 .join("; ") 导致的语法错误）
+    const psScript = winDaemon.buildStopProcessesScript(process.pid);
+    assert.ok(!psScript.includes("-and (;"), "PowerShell 脚本不能包含非法分号");
+    assert.ok(!psScript.includes("-or;"), "PowerShell 脚本不能包含非法分号");
+    if (process.platform === "win32") {
+      // 使用 PowerShell AST Parser 纯语法检查，不执行杀进程
+      const parserCheck = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `$errs = $null; [System.Management.Automation.Language.Parser]::ParseInput(@'\n${psScript}\n'@, [ref]$null, [ref]$errs) | Out-Null; if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }`,
+        ],
+        { encoding: "utf8", windowsHide: true }
+      );
+      assert.strictEqual(parserCheck.status, 0, `PowerShell 语法校验失败: ${parserCheck.stderr}`);
+    }
+    console.log("✅ 7. Windows 守护进程安装/卸载模块、UTF-16LE 自启脚本与 PowerShell 语法校验通过");
+
+    // 8. Windows 5 层缓存结构探测、自定义端口/配置保留、localhost IPv4 归一化与纯 Node PATH 查找
+    const deepRoot = path.join(tempDir, "local-appdata-kimi-code");
+    const deepWebDir = path.join(deepRoot, "web", "2.8.1", "win32-x64", "abc123hash", "dist-web");
+    fs.mkdirSync(deepWebDir, { recursive: true });
+    fs.writeFileSync(path.join(deepWebDir, "index.html"), initialHtml, "utf8");
+    const detectedDeep = detectInstallTarget(deepRoot, "standalone");
+    assert.strictEqual(detectedDeep.targetDir, deepWebDir, "5 层深度的 kimi-code 上级目录应能定位到 dist-web");
+
+    // 验证重复 applyPatch（模拟 daemon 不传 port/configPath）保留之前的自定义端口与 configPath
+    const keepServerConfig = path.join(tempDir, "keep-state", "server.json");
+    applyPatch(deepWebDir, { configPath: mockConfigTomlPath, serverConfigPath: keepServerConfig, port: 60003 });
+    // 模拟 kimi web 还原 index.html 后 daemon 无参重注入
+    fs.writeFileSync(path.join(deepWebDir, "index.html"), initialHtml, "utf8");
+    const reinjected = applyPatch(deepWebDir, { serverConfigPath: keepServerConfig });
+    assert.strictEqual(reinjected.port, 60003, "daemon 重注入应保留用户自定义端口");
+    assert.strictEqual(readServerConfig(keepServerConfig).port, 60003);
+    assert.ok(fs.readFileSync(path.join(deepWebDir, "kimi-renamer.js"), "utf8").includes('"port":60003'));
+
+    // 验证 localhost / ::1 归一为 127.0.0.1（避开 Windows IPv6 loopback 陷阱）
+    const deepScript = fs.readFileSync(path.join(deepWebDir, "kimi-renamer.js"), "utf8");
+    for (const [hostIn, expectedHost] of [
+      ["localhost", "127.0.0.1"],
+      ["::1", "127.0.0.1"],
+      ["[::1]", "127.0.0.1"],
+      ["192.168.1.25", "192.168.1.25"],
+    ]) {
+      const ctx = { window: { location: { hostname: hostIn } } };
+      vm.runInNewContext(
+        deepScript.replace("// 初始化与监听", "globalThis.testApi = { renamerBaseUrl }; return;\n// 初始化与监听"),
+        ctx
+      );
+      assert.strictEqual(ctx.testApi.renamerBaseUrl(), `http://${expectedHost}:60003`);
+    }
+
+    // 验证纯 Node.js PATH 查找（含空格目录与引号包裹）
+    const { findExecutablesInPath } = require("../src/paths");
+    const spacedBinDir = path.join(tempDir, "bin dir with space");
+    fs.mkdirSync(spacedBinDir, { recursive: true });
+    const fakeBinName = process.platform === "win32" ? "fake-kimi-test.cmd" : "fake-kimi-test";
+    const fakeBinPath = path.join(spacedBinDir, fakeBinName);
+    fs.writeFileSync(fakeBinPath, process.platform === "win32" ? "@echo off\r\n" : "#!/bin/sh\n", "utf8");
+    if (process.platform !== "win32") fs.chmodSync(fakeBinPath, 0o755);
+    const foundBins = findExecutablesInPath("fake-kimi-test", {
+      PATH: `"${spacedBinDir}"${path.delimiter}${process.env.PATH || ""}`,
+      PATHEXT: ".EXE;.CMD;.BAT",
+    });
+    assert.strictEqual(foundBins.length, 1);
+    assert.strictEqual(foundBins[0].toLowerCase(), fakeBinPath.toLowerCase());
+
+    // 验证 CLI 拒绝非法端口
+    for (const badPort of ["abc", "0", "70000", "-1"]) {
+      const badPortRes = spawnSync(
+        process.execPath,
+        [cli, "patch", "--mode", "standalone", "--path", deepWebDir, "--config", mockConfigTomlPath, "--port", badPort],
+        { encoding: "utf8", env }
+      );
+      assert.strictEqual(badPortRes.status, 1, `非法端口 ${badPort} 应返回非零退出码`);
+    }
+    console.log("✅ 8. 深层缓存探测、自定义端口保留、IPv4 归一化、纯 Node PATH 查找与非法端口拦截通过");
 
     console.log("\n🎉 单文件模式全部测试通过！\n");
   } finally {

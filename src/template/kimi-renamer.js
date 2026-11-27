@@ -192,7 +192,12 @@
   // 6. 调用大模型生成标题（支持 npm 同源代理与单文件 sidecar 两种模式）
   function renamerBaseUrl() {
     const port = (AI_CONFIG && AI_CONFIG.port) || 58629;
-    const hostname = window.location.hostname || "127.0.0.1";
+    const rawHostname = (window.location.hostname || "127.0.0.1").toLowerCase();
+    // Windows 上 localhost 常优先解析到 IPv6 ::1，而 sidecar 监听 IPv4 0.0.0.0，统一使用 127.0.0.1 避免连接延迟或失败
+    const hostname =
+      rawHostname === "localhost" || rawHostname === "::1" || rawHostname === "[::1]"
+        ? "127.0.0.1"
+        : window.location.hostname;
     const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
     return `http://${host}:${port}`;
   }

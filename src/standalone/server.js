@@ -1,14 +1,15 @@
 const fs = require("fs");
 const http = require("http");
 const crypto = require("crypto");
-const { serverConfigPath } = require("../paths");
+const path = require("path");
+const { serverConfigPath, sidecarPidPath } = require("../paths");
 const { stripTitle } = require("../kimi-config");
 
 const DEFAULT_SERVER_CONFIG = serverConfigPath();
 const MAX_BODY_BYTES = 64 * 1024;
 const REQUEST_TIMEOUT_MS = 30000;
 
-function loadServerConfig(configPath = DEFAULT_SERVER_CONFIG) {
+function loadServerConfig(configPath = serverConfigPath()) {
   let raw;
   try {
     raw = fs.readFileSync(configPath, "utf8");
@@ -35,6 +36,7 @@ function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Kimi-Renamer-Token");
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
   res.setHeader("Access-Control-Max-Age", "600");
 }
 
@@ -114,7 +116,7 @@ async function generateTitle(config, prompt) {
 }
 
 function createServer(options = {}) {
-  const configPath = options.configPath || DEFAULT_SERVER_CONFIG;
+  const getConfigPath = () => options.configPath || serverConfigPath();
   const logger = options.logger || console;
 
   return http.createServer(async (req, res) => {
@@ -128,13 +130,19 @@ function createServer(options = {}) {
 
     let config;
     try {
-      config = loadServerConfig(configPath);
+      config = loadServerConfig(getConfigPath());
     } catch (e) {
       sendJson(res, 500, { error: e.message });
       return;
     }
 
-    const url = new URL(req.url, "http://localhost");
+    let url;
+    try {
+      url = new URL(req.url || "/", "http://localhost");
+    } catch (e) {
+      sendJson(res, 400, { error: "无效的请求地址" });
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, { ok: true, model: config.model, port: config.port });
@@ -182,10 +190,17 @@ function createServer(options = {}) {
 }
 
 function startServer(options = {}) {
-  const configPath = options.configPath || DEFAULT_SERVER_CONFIG;
+  const configPath = options.configPath || serverConfigPath();
   const config = loadServerConfig(configPath);
   const host = options.host || config.host;
-  const port = Number(options.port || config.port);
+  const rawPort =
+    options.port !== undefined && options.port !== null
+      ? options.port
+      : process.env.KIMI_RENAMER_PORT || config.port;
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    return Promise.reject(new Error(`无效的 sidecar 端口: ${rawPort}`));
+  }
   const server = createServer({ configPath, logger: options.logger });
 
   return new Promise((resolve, reject) => {
@@ -195,6 +210,42 @@ function startServer(options = {}) {
       resolve({ server, host, port, config });
     });
   });
+}
+
+function appendSidecarLog(message) {
+  const logFile = process.env.KIMI_RENAMER_LOG_FILE;
+  if (!logFile) return;
+  try {
+    fs.mkdirSync(path.dirname(logFile), { recursive: true });
+    fs.appendFileSync(logFile, `[${new Date().toISOString()}] [sidecar] ${message}\n`, "utf8");
+  } catch (e) {
+    // 忽略日志写入失败
+  }
+}
+
+function writeSidecarPid(pidFile = sidecarPidPath()) {
+  try {
+    fs.mkdirSync(path.dirname(pidFile), { recursive: true });
+    fs.writeFileSync(
+      pidFile,
+      JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }) + "\n",
+      "utf8"
+    );
+  } catch (e) {
+    // 忽略 PID 写入失败
+  }
+}
+
+function removeSidecarPid(pidFile = sidecarPidPath()) {
+  try {
+    const raw = fs.readFileSync(pidFile, "utf8").trim();
+    const parsed = raw.startsWith("{") ? JSON.parse(raw) : { pid: Number(raw) };
+    if (parsed && Number(parsed.pid) === process.pid) {
+      fs.unlinkSync(pidFile);
+    }
+  } catch (e) {
+    // 忽略 PID 清理失败
+  }
 }
 
 module.exports = {
@@ -209,15 +260,25 @@ module.exports = {
 if (require.main === module) {
   startServer()
     .then(({ server, host, port, config }) => {
+      writeSidecarPid();
       const shownHost = host === "0.0.0.0" ? "127.0.0.1" : host;
       console.log(`[kimi-renamer] sidecar 已启动: http://${shownHost}:${port}/`);
       console.log(`[kimi-renamer] 模型: ${config.model}`);
-      const shutdown = () => server.close(() => process.exit(0));
+      const shutdown = () => {
+        removeSidecarPid();
+        if (typeof server.closeAllConnections === "function") {
+          server.closeAllConnections();
+        }
+        server.close(() => process.exit(0));
+      };
+      process.on("exit", () => removeSidecarPid());
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
     })
     .catch((err) => {
-      console.error(`[kimi-renamer] 启动失败: ${err.message}`);
+      const msg = err && err.message ? err.message : String(err);
+      appendSidecarLog(`启动失败: ${msg}`);
+      console.error(`[kimi-renamer] 启动失败: ${msg}`);
       process.exit(1);
     });
 }

@@ -143,6 +143,7 @@ function createArchives(outDir, builtList) {
     const tarPath = path.join(outDir, tarName);
     const tarRes = spawnSync("tar", ["-czf", tarPath, "-C", outDir, item.dirName], {
       encoding: "utf8",
+      windowsHide: true,
     });
     if (tarRes.status === 0) {
       archives.push(tarPath);
@@ -150,11 +151,38 @@ function createArchives(outDir, builtList) {
 
     const zipName = `${item.dirName}-v${item.version}.zip`;
     const zipPath = path.join(outDir, zipName);
+    let zipOk = false;
     const zipRes = spawnSync("zip", ["-rq", zipPath, item.dirName], {
       cwd: outDir,
       encoding: "utf8",
+      windowsHide: true,
     });
     if (zipRes.status === 0) {
+      zipOk = true;
+    } else if (process.platform === "win32") {
+      if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+      const srcDir = path.join(outDir, item.dirName);
+      const psEsc = (s) => `'${String(s).replace(/'/g, "''")}'`;
+      const psRes = spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-Command",
+          `Compress-Archive -LiteralPath ${psEsc(srcDir)} -DestinationPath ${psEsc(zipPath)} -Force`,
+        ],
+        {
+          encoding: "utf8",
+          windowsHide: true,
+        }
+      );
+      if (psRes.status === 0 && fs.existsSync(zipPath)) {
+        zipOk = true;
+      }
+    }
+    if (zipOk) {
       archives.push(zipPath);
     }
   }
@@ -188,6 +216,10 @@ if (require.main === module) {
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--out") {
       outDir = args[++i];
+      if (!outDir || outDir.startsWith("-")) {
+        console.error("❌ --out 缺少输出目录参数");
+        process.exit(1);
+      }
     } else if (args[i] === "--archive") {
       archive = true;
     }
