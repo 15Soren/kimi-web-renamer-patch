@@ -19,7 +19,7 @@ jobs:
           node-version: 22
       - name: Run full test suite
         run: npm test
-      - name: Build npm and standalone release packages
+      - name: Build npm release package
         run: node scripts/build-releases.js --archive
       - name: List release artifacts
         run: ls -la dist/releases/

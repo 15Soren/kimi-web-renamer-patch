@@ -1,22 +1,19 @@
 {
   "name": "kimi-web-renamer-patch",
   "version": "1.2.3",
-  "description": "一键将 AI 对话自动命名功能补丁（Patch）注入到原生的 Kimi Code Web 客户端中，同时适配 npm 安装与单文件二进制安装，直接复用 config.toml",
+  "description": "一键将 AI 对话自动命名功能补丁（Patch）注入到通过 npm 安装的 Kimi Code Web 客户端中，直接复用 config.toml",
   "main": "src/patcher.js",
   "bin": {
-    "kimi-patch": "./bin/cli.js",
-    "kimi-web-renamer": "./bin/kimi-web-renamer"
+    "kimi-patch": "./bin/cli.js"
   },
   "scripts": {
     "patch": "node bin/cli.js patch",
     "unpatch": "node bin/cli.js unpatch",
     "status": "node bin/cli.js status",
     "models": "node bin/cli.js models",
-    "serve": "node bin/cli.js serve",
-    "daemon": "node src/standalone/daemon.js",
     "build:release": "node scripts/build-releases.js",
     "build:release:archive": "node scripts/build-releases.js --archive",
-    "test": "node test/test-mock.js && node test/test-standalone.js && node test/test-config.js && node test/test-server.js && node test/test-regressions.js && node test/test-observer.js && node test/test-releases.js && node test/test-daemon-e2e.js"
+    "test": "node test/test-mock.js && node test/test-config.js && node test/test-regressions.js && node test/test-observer.js && node test/test-releases.js"
   },
   "keywords": [
     "kimi",

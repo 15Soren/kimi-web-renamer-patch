@@ -5,8 +5,8 @@ const { execSync } = require("child_process");
 const {
   findKimiConfigPath,
   resolveRenameModelInfo,
-} = require("../kimi-config");
-const { findExecutablesInPath } = require("../paths");
+} = require("./kimi-config");
+const { findExecutablesInPath } = require("./paths");
 
 // 标记常量
 const SCRIPT_INJECTION = '<script src="/kimi-renamer.js"></script>';
@@ -167,7 +167,6 @@ function checkStatus(kimiDir) {
   const hasBackup = fs.existsSync(htmlBak) && fs.existsSync(mainBak);
 
   return {
-    mode: "npm",
     targetDir: kimiDir,
     isFullyPatched: isRenamerJsPresent && isHtmlPatched && isProxyPatched,
     isRenamerJsPresent,
@@ -236,22 +235,8 @@ function applyPatch(kimiDir, options = {}) {
   const patchedMain = mainContent.replace(ROUTE_HOOK_TARGET, () => `${ROUTE_HOOK_TARGET}\n${routeCode}`);
 
   // 1. 生成并写入 dist-web/kimi-renamer.js
-  const templatePath = path.join(__dirname, "..", "template", "kimi-renamer.js");
-  const templateContent = fs.readFileSync(templatePath, "utf8");
-  const finalScriptContent = templateContent.replace(
-    "__CONFIG_PLACEHOLDER__",
-    () => JSON.stringify(
-      {
-        mode: "proxy",
-        model: modelInfo.actualModel || modelInfo.model,
-        systemPrompt: modelInfo.systemPrompt,
-        temperature: modelInfo.temperature ?? 0.2,
-        maxTokens: modelInfo.maxTokens ?? 1024,
-      },
-      null,
-      2
-    )
-  );
+  const templatePath = path.join(__dirname, "template", "kimi-renamer.js");
+  const finalScriptContent = fs.readFileSync(templatePath, "utf8");
   if (!fs.existsSync(htmlBak) || (!htmlContent.includes(SCRIPT_INJECTION) && fs.readFileSync(htmlBak, "utf8") !== htmlContent)) {
     fs.writeFileSync(htmlBak, htmlContent, "utf8");
   }
@@ -262,7 +247,7 @@ function applyPatch(kimiDir, options = {}) {
   fs.writeFileSync(renamerJs, finalScriptContent, "utf8");
 
   // 复制 Kimi.ico 图标到 dist-web
-  const iconSource = path.join(__dirname, "..", "assets", "Kimi.ico");
+  const iconSource = path.join(__dirname, "assets", "Kimi.ico");
   const iconTarget = path.join(distWebDir, "kimi-renamer.ico");
   if (fs.existsSync(iconSource)) {
     fs.copyFileSync(iconSource, iconTarget);
@@ -285,7 +270,7 @@ function applyPatch(kimiDir, options = {}) {
   // 3. 修改 dist/main.mjs (保留 CSP 并注入固定目标代理路由)
   fs.writeFileSync(mainMjs, patchedMain, "utf8");
 
-  return { success: true, mode: "npm", targetDir: kimiDir, modelInfo };
+  return { success: true, targetDir: kimiDir, modelInfo };
 }
 
 function removeScriptInjection(content) {

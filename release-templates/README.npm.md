@@ -2,9 +2,7 @@
 
 适用于通过 `npm` 安装的 `@moonshot-ai/kimi-code`（安装目录包含 `dist/main.mjs` 与 `dist-web/index.html`）。
 
-在会话标题栏添加无边框重命名按钮，点击后通过同源服务端路由调用 `config.toml` 中配置的模型生成标题并写回，不需要额外的 sidecar 或守护进程。
-
-> 如果使用的是官方单文件二进制安装的 `kimi`（没有 `dist/main.mjs`），请使用 **standalone 单文件版**。
+在会话标题栏添加无边框重命名按钮，点击后通过同源服务端路由调用 `config.toml` 中配置的模型生成标题并写回。
 
 ## 使用方法
 

@@ -11,14 +11,13 @@ const RELEASE_SPECS = {
     dirName: "kimi-web-renamer-patch-npm",
     packageName: "kimi-web-renamer-patch-npm",
     description: "Kimi Code Web 自动重命名补丁（npm 安装专用版，直接注入同源代理路由）",
-    meta: { variant: "npm", defaultMode: "npm" },
     readmeTemplate: "release-templates/README.npm.md",
     files: [
       "bin/cli.js",
       "src/patcher.js",
       "src/kimi-config.js",
       "src/paths.js",
-      "src/modes/npm.js",
+      "src/npm-patch.js",
       "src/template/kimi-renamer.js",
       "src/assets/Kimi.ico",
       "LICENSE",
@@ -32,51 +31,6 @@ const RELEASE_SPECS = {
       unpatch: "node bin/cli.js unpatch",
       status: "node bin/cli.js status",
       models: "node bin/cli.js models",
-    },
-  },
-  standalone: {
-    dirName: "kimi-web-renamer-patch-standalone",
-    packageName: "kimi-web-renamer-patch-standalone",
-    description: "Kimi Code Web 自动重命名补丁（单文件二进制安装专用版，含 sidecar 与守护进程）",
-    meta: { variant: "standalone", defaultMode: "standalone" },
-    readmeTemplate: "release-templates/README.standalone.md",
-    files: [
-      "bin/cli.js",
-      "bin/kimi-web-renamer",
-      "bin/kimi-web-renamer.cmd",
-      "bin/install-daemon",
-      "bin/install-daemon.cmd",
-      "bin/uninstall-daemon",
-      "bin/uninstall-daemon.cmd",
-      "src/patcher.js",
-      "src/kimi-config.js",
-      "src/paths.js",
-      "src/modes/standalone.js",
-      "src/standalone/server.js",
-      "src/standalone/daemon.js",
-      "src/standalone/win-daemon.js",
-      "src/template/kimi-renamer.js",
-      "src/assets/Kimi.ico",
-      "LICENSE",
-    ],
-    executables: [
-      "bin/cli.js",
-      "bin/kimi-web-renamer",
-      "bin/install-daemon",
-      "bin/uninstall-daemon",
-      "src/standalone/daemon.js",
-    ],
-    bin: {
-      "kimi-patch": "./bin/cli.js",
-      "kimi-web-renamer": "./bin/kimi-web-renamer",
-    },
-    scripts: {
-      patch: "node bin/cli.js patch",
-      unpatch: "node bin/cli.js unpatch",
-      status: "node bin/cli.js status",
-      models: "node bin/cli.js models",
-      serve: "node bin/cli.js serve",
-      daemon: "node src/standalone/daemon.js",
     },
   },
 };
@@ -108,10 +62,6 @@ function buildReleaseVariant(variantName, outDir, rootPkg) {
   for (const rel of spec.files) {
     copyFileTo(rel, releaseDir, execSet.has(rel));
   }
-
-  // 写入 release-meta.js 锁定发行版模式
-  const metaContent = `module.exports = ${JSON.stringify(spec.meta, null, 2)};\n`;
-  fs.writeFileSync(path.join(releaseDir, "src", "release-meta.js"), metaContent, "utf8");
 
   // 写入裁剪后的 package.json
   const pkg = {
@@ -194,10 +144,7 @@ function buildReleases(options = {}) {
   const rootPkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
   fs.mkdirSync(outDir, { recursive: true });
 
-  const built = [
-    buildReleaseVariant("npm", outDir, rootPkg),
-    buildReleaseVariant("standalone", outDir, rootPkg),
-  ];
+  const built = [buildReleaseVariant("npm", outDir, rootPkg)];
 
   const archives = options.archive ? createArchives(outDir, built) : [];
   return { outDir, built, archives };
@@ -225,7 +172,7 @@ if (require.main === module) {
     }
   }
   const result = buildReleases({ outDir, archive });
-  console.log(`✅ 已构建双形态 Release 到: ${result.outDir}`);
+  console.log(`✅ 已构建 npm Release 到: ${result.outDir}`);
   for (const item of result.built) {
     console.log(`   - [${item.variant}] ${item.releaseDir}`);
   }

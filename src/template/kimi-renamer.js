@@ -6,9 +6,6 @@
 (function () {
   "use strict";
 
-  // 大模型调用配置 (由补丁工具自动填充)
-  const AI_CONFIG = __CONFIG_PLACEHOLDER__;
-
   // 1. 注入标题栏自适应组件样式 (完全剔除所有旧版悬浮大按钮样式)
   function injectStyles() {
     if (document.getElementById("kimi-renamer-style")) return;
@@ -189,49 +186,8 @@
     return null;
   }
 
-  // 6. 调用大模型生成标题（支持 npm 同源代理与单文件 sidecar 两种模式）
-  function renamerBaseUrl() {
-    const port = (AI_CONFIG && AI_CONFIG.port) || 58629;
-    const rawHostname = (window.location.hostname || "127.0.0.1").toLowerCase();
-    // Windows 上 localhost 常优先解析到 IPv6 ::1，而 sidecar 监听 IPv4 0.0.0.0，统一使用 127.0.0.1 避免连接延迟或失败
-    const hostname =
-      rawHostname === "localhost" || rawHostname === "::1" || rawHostname === "[::1]"
-        ? "127.0.0.1"
-        : window.location.hostname;
-    const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
-    return `http://${host}:${port}`;
-  }
-
+  // 6. 通过同源服务端路由调用大模型生成标题
   async function generateTitleFromAI(firstMessage, token, clientId) {
-    if (AI_CONFIG && AI_CONFIG.mode === "sidecar") {
-      const headers = { "Content-Type": "application/json" };
-      if (AI_CONFIG.token) {
-        headers["X-Kimi-Renamer-Token"] = AI_CONFIG.token;
-      }
-
-      let proxyRes;
-      try {
-        proxyRes = await fetch(`${renamerBaseUrl()}/generate`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ prompt: firstMessage }),
-        });
-      } catch (err) {
-        throw new Error(
-          "重命名服务不可达，请先启动 kimi-web-renamer 或 node bin/cli.js serve"
-        );
-      }
-
-      const data = await proxyRes.json().catch(() => null);
-      if (proxyRes.ok && data && data.title) {
-        return data.title;
-      }
-      if (data && data.error) {
-        throw new Error(data.error);
-      }
-      throw new Error(`重命名服务响应异常 (${proxyRes.status})`);
-    }
-
     const proxyRes = await fetch("/api/v1/custom-renamer/generate", {
       method: "POST",
       headers: {

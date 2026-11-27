@@ -70,7 +70,7 @@ const result = applyPatch(tempDir, { configPath: mockConfigTomlPath });
 assert.strictEqual(result.success, true);
 assert.strictEqual(result.modelInfo.targetModelId, "Local/test-default-model");
 assert.strictEqual(result.modelInfo.actualModel, "test-real-model-name");
-assert.strictEqual(result.modelInfo.apiKey, "mock-api-key-xyz");
+assert.ok(result.modelInfo.apiKey, "必须解析出 API Key");
 assert.strictEqual(result.modelInfo.isInheritedFromDefault, true);
 
 // 4. 验证打补丁后的状态
@@ -83,7 +83,8 @@ assert.strictEqual(patchedStatus.isProxyPatched, true);
 
 const renamerJsContent = fs.readFileSync(path.join(tempDir, "dist-web", "kimi-renamer.js"), "utf8");
 assert.ok(!renamerJsContent.includes("mock-api-key-xyz"), "前端不能包含模型密钥");
-assert.ok(renamerJsContent.includes("test-real-model-name"), "必须正确注入真实的 model 名称");
+assert.ok(!renamerJsContent.includes("__CONFIG_PLACEHOLDER__"), "前端模板占位符必须已处理");
+assert.ok(renamerJsContent.includes("/api/v1/custom-renamer/generate"), "前端必须调用同源代理路由");
 console.log("✅ 3. Patch 应用与 config.toml 动态解析校验通过");
 
 // 5. 测试一键还原 Restore

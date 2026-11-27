@@ -27,48 +27,34 @@ function stripTitle(raw) {
   return title;
 }
 
-function isSamePath(a, b) {
-  if (!a || !b) return false;
-  const na = path.resolve(a);
-  const nb = path.resolve(b);
-  return process.platform === "win32" ? na.toLowerCase() === nb.toLowerCase() : na === nb;
-}
-
 /**
- * 跨平台查找 Kimi Code 的 config.toml 路径。
- * 传入 homeOverride 时按该用户自己的 ~/.kimi-code 查找（多用户守护进程使用）。
+ * 跨平台查找 Kimi Code 的 config.toml 路径
  */
-function findKimiConfigPath(customPath, homeOverride) {
+function findKimiConfigPath(customPath) {
   if (customPath) {
     const resolved = path.resolve(customPath);
     if (fs.existsSync(resolved)) return fs.realpathSync(resolved);
     throw new Error(`指定的配置文件不存在: ${resolved}`);
   }
 
-  const currentHome = os.homedir();
-  const useCurrentEnv = !homeOverride || isSamePath(homeOverride, currentHome);
-  const homedir = useCurrentEnv ? currentHome : homeOverride;
+  const homedir = os.homedir();
   const candidates = [
-    useCurrentEnv
-      ? path.join(kimiHome(), "config.toml")
-      : path.join(homeOverride, ".kimi-code", "config.toml"),
+    path.join(kimiHome(), "config.toml"),
     path.join(homedir, ".kimi", "config.toml"),
   ];
-  if (useCurrentEnv && process.env.XDG_CONFIG_HOME && path.isAbsolute(process.env.XDG_CONFIG_HOME)) {
+  if (process.env.XDG_CONFIG_HOME && path.isAbsolute(process.env.XDG_CONFIG_HOME)) {
     candidates.push(path.join(process.env.XDG_CONFIG_HOME, "kimi-code", "config.toml"));
   }
   candidates.push(path.join(homedir, ".config", "kimi-code", "config.toml"));
   if (process.platform === "win32") {
-    const appData = useCurrentEnv
-      ? process.env.APPDATA || path.join(homedir, "AppData", "Roaming")
-      : path.join(homedir, "AppData", "Roaming");
+    const appData = process.env.APPDATA || path.join(homedir, "AppData", "Roaming");
     candidates.push(path.join(appData, "kimi-code", "config.toml"));
-    if (useCurrentEnv && process.env.ProgramData && path.isAbsolute(process.env.ProgramData)) {
+    if (process.env.ProgramData && path.isAbsolute(process.env.ProgramData)) {
       candidates.push(path.join(process.env.ProgramData, ".kimi-code", "config.toml"));
     }
-  } else if (!homeOverride) {
+  } else {
     const sudoHome = sudoUserHome();
-    if (sudoHome && !isSamePath(sudoHome, currentHome)) {
+    if (sudoHome) {
       candidates.push(
         path.join(sudoHome, ".kimi-code", "config.toml"),
         path.join(sudoHome, ".kimi", "config.toml"),
