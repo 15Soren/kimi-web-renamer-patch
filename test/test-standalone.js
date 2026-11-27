@@ -174,6 +174,36 @@ async function main() {
     assert.strictEqual(cliUnpatch.status, 0, cliUnpatch.stderr);
     console.log("✅ 6. CLI --mode standalone 命令链路校验通过");
 
+    // 7. Windows 守护进程安装/卸载模块校验（Unicode 路径、UTF-16LE BOM、双击探测）
+    const winDaemon = require("../src/standalone/win-daemon");
+    const mockAppData = path.join(tempDir, "mock-appdata-张三");
+    const winEnv = { APPDATA: mockAppData };
+    const installed = winDaemon.installDaemon({
+      env: winEnv,
+      nodeExe: "C:\\Program Files\\nodejs\\node.exe",
+      daemonJs: "D:\\我的程序\\kimi-web-renamer\\src\\standalone\\daemon.js",
+      skipSpawn: true,
+    });
+    assert.ok(fs.existsSync(installed.vbsPath), "应创建 Startup .vbs 文件");
+    const vbsBuf = fs.readFileSync(installed.vbsPath);
+    assert.strictEqual(vbsBuf[0], 0xff, "VBS 应包含 UTF-16LE BOM");
+    assert.strictEqual(vbsBuf[1], 0xfe, "VBS 应包含 UTF-16LE BOM");
+    const vbsText = vbsBuf.slice(2).toString("utf16le");
+    assert.ok(vbsText.includes('"""C:\\Program Files\\nodejs\\node.exe"" ""D:\\我的程序\\kimi-web-renamer\\src\\standalone\\daemon.js"""'));
+    assert.ok(vbsText.endsWith("\r\n"));
+    assert.strictEqual(
+      winDaemon.isExplorerDoubleClick({ CMDCMDLINE: 'C:\\Windows\\system32\\cmd.exe /c ""D:\\bin\\install-daemon.cmd" "' }),
+      true
+    );
+    assert.strictEqual(
+      winDaemon.isExplorerDoubleClick({ CMDCMDLINE: "cmd.exe" }),
+      false
+    );
+    const uninstalled = winDaemon.uninstallDaemon({ env: winEnv, skipStop: true });
+    assert.strictEqual(uninstalled.removedVbs, true);
+    assert.ok(!fs.existsSync(installed.vbsPath));
+    console.log("✅ 7. Windows 守护进程安装/卸载模块与 UTF-16LE 自启脚本校验通过");
+
     console.log("\n🎉 单文件模式全部测试通过！\n");
   } finally {
     if (prevCacheRoots === undefined) delete process.env.KIMI_RENAMER_CACHE_ROOTS;

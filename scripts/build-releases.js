@@ -54,6 +54,7 @@ const RELEASE_SPECS = {
       "src/modes/standalone.js",
       "src/standalone/server.js",
       "src/standalone/daemon.js",
+      "src/standalone/win-daemon.js",
       "src/template/kimi-renamer.js",
       "src/assets/Kimi.ico",
       "LICENSE",
@@ -84,7 +85,12 @@ function copyFileTo(srcRel, destRoot, isExecutable) {
   const srcAbs = path.join(REPO_ROOT, srcRel);
   const destAbs = path.join(destRoot, srcRel);
   fs.mkdirSync(path.dirname(destAbs), { recursive: true });
-  fs.copyFileSync(srcAbs, destAbs);
+  if (srcRel.endsWith(".cmd") || srcRel.endsWith(".bat")) {
+    const content = fs.readFileSync(srcAbs, "utf8").replace(/\r?\n/g, "\r\n");
+    fs.writeFileSync(destAbs, content, "utf8");
+  } else {
+    fs.copyFileSync(srcAbs, destAbs);
+  }
   if (isExecutable && process.platform !== "win32") {
     fs.chmodSync(destAbs, 0o755);
   }

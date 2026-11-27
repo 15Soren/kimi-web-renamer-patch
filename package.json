@@ -1,6 +1,6 @@
 {
   "name": "kimi-web-renamer-patch",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "一键将 AI 对话自动命名功能补丁（Patch）注入到原生的 Kimi Code Web 客户端中，同时适配 npm 安装与单文件二进制安装，直接复用 config.toml",
   "main": "src/patcher.js",
   "bin": {
