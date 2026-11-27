@@ -82,6 +82,7 @@ function startSidecar() {
   try {
     serverChild = spawn(process.execPath, [path.join(__dirname, "server.js")], {
       detached: true,
+      windowsHide: true,
       stdio: ["ignore", "ignore", "ignore"],
     });
     serverChild.unref();

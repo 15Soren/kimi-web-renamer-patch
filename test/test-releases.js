@@ -27,8 +27,11 @@ function main() {
     assert.ok(fs.existsSync(path.join(standaloneDir, "src", "standalone", "server.js")));
     assert.ok(fs.existsSync(path.join(standaloneDir, "src", "standalone", "daemon.js")));
     assert.ok(fs.existsSync(path.join(standaloneDir, "bin", "kimi-web-renamer")));
+    assert.ok(fs.existsSync(path.join(standaloneDir, "bin", "kimi-web-renamer.cmd")));
     assert.ok(fs.existsSync(path.join(standaloneDir, "bin", "install-daemon")));
+    assert.ok(fs.existsSync(path.join(standaloneDir, "bin", "install-daemon.cmd")));
     assert.ok(fs.existsSync(path.join(standaloneDir, "bin", "uninstall-daemon")));
+    assert.ok(fs.existsSync(path.join(standaloneDir, "bin", "uninstall-daemon.cmd")));
     assert.ok(!fs.existsSync(path.join(standaloneDir, "src", "modes", "npm.js")), "单文件版不应包含 npm 模式");
 
     const npmPkg = JSON.parse(fs.readFileSync(path.join(npmDir, "package.json"), "utf8"));

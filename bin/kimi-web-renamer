@@ -1,60 +1,118 @@
-#!/usr/bin/env bash
-# 启动 sidecar（如未运行）并执行 kimi web，退出时一并清理 sidecar。
-set -euo pipefail
+#!/usr/bin/env node
+// 启动 sidecar（如未运行）并执行 kimi web，退出时一并清理 sidecar。跨平台支持 Linux / macOS / Windows。
+const fs = require("fs");
+const http = require("http");
+const os = require("os");
+const path = require("path");
+const { spawn } = require("child_process");
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
-KIMI_CODE_HOME="${KIMI_CODE_HOME:-$HOME/.kimi-code}"
-CONFIG="${KIMI_RENAMER_SERVER_CONFIG:-$KIMI_CODE_HOME/kimi-renamer/server.json}"
+const ROOT = path.resolve(__dirname, "..");
+const KIMI_CODE_HOME = process.env.KIMI_CODE_HOME || path.join(os.homedir(), ".kimi-code");
+const CONFIG_PATH =
+  process.env.KIMI_RENAMER_SERVER_CONFIG || path.join(KIMI_CODE_HOME, "kimi-renamer", "server.json");
 
-if [ ! -f "$CONFIG" ]; then
-  echo "[kimi-web-renamer] 未找到 sidecar 配置，请先运行: node \"$ROOT/bin/cli.js\" patch" >&2
-  exit 1
-fi
-
-PORT="${KIMI_RENAMER_PORT:-$(node -e 'const c=require(process.argv[1]);console.log(c.port||58629)' "$CONFIG")}"
-
-healthy() {
-  node -e '
-    const http = require("http");
-    const req = http.get({ host: "127.0.0.1", port: Number(process.argv[1]), path: "/health", timeout: 1000 }, (res) => {
+function checkHealth(port) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: "127.0.0.1", port, path: "/health", timeout: 1000 }, (res) => {
       res.resume();
-      process.exit(res.statusCode === 200 ? 0 : 1);
+      resolve(res.statusCode === 200);
     });
-    req.on("error", () => process.exit(1));
-    req.on("timeout", () => { req.destroy(); process.exit(1); });
-  ' "$PORT" >/dev/null 2>&1
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+  });
 }
 
-STARTED=0
-if ! healthy; then
-  node "$ROOT/src/standalone/server.js" &
-  SIDECAR_PID=$!
-  STARTED=1
-  for _ in $(seq 1 50); do
-    healthy && break
-    sleep 0.1
-  done
-  if ! healthy; then
-    echo "[kimi-web-renamer] sidecar 启动失败（端口 $PORT）" >&2
-    kill "$SIDECAR_PID" 2>/dev/null || true
-    exit 1
-  fi
-  echo "[kimi-web-renamer] sidecar 已启动: http://127.0.0.1:$PORT/"
-fi
-
-cleanup() {
-  if [ "$STARTED" = "1" ] && [ -n "${SIDECAR_PID:-}" ]; then
-    kill "$SIDECAR_PID" 2>/dev/null || true
-    wait "$SIDECAR_PID" 2>/dev/null || true
-  fi
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
-trap cleanup EXIT INT TERM
 
-KIMI_BIN="${KIMI_BIN:-$(command -v kimi || true)}"
-if [ -z "$KIMI_BIN" ]; then
-  echo "[kimi-web-renamer] 找不到 kimi 可执行文件，请确认 Kimi Code 已安装" >&2
-  exit 1
-fi
+async function main() {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    console.error(`[kimi-web-renamer] 未找到 sidecar 配置，请先运行: node "${path.join(ROOT, "bin", "cli.js")}" patch`);
+    process.exit(1);
+  }
 
-"$KIMI_BIN" web "$@"
+  let config;
+  try {
+    config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+  } catch (err) {
+    console.error(`[kimi-web-renamer] 无法读取 sidecar 配置 (${CONFIG_PATH}): ${err.message}`);
+    process.exit(1);
+  }
+
+  const port = Number(process.env.KIMI_RENAMER_PORT || config.port || 58629);
+  let sidecarChild = null;
+
+  const cleanup = () => {
+    if (sidecarChild && sidecarChild.exitCode === null) {
+      try {
+        sidecarChild.kill();
+      } catch (e) {
+        // 忽略已退出的进程
+      }
+    }
+  };
+
+  process.on("exit", cleanup);
+  process.on("SIGINT", () => {
+    cleanup();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    cleanup();
+    process.exit(143);
+  });
+
+  if (!(await checkHealth(port))) {
+    sidecarChild = spawn(process.execPath, [path.join(ROOT, "src", "standalone", "server.js")], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+
+    let healthy = false;
+    for (let i = 0; i < 50; i++) {
+      if (await checkHealth(port)) {
+        healthy = true;
+        break;
+      }
+      await sleep(100);
+    }
+
+    if (!healthy) {
+      console.error(`[kimi-web-renamer] sidecar 启动失败（端口 ${port}）`);
+      cleanup();
+      process.exit(1);
+    }
+    console.log(`[kimi-web-renamer] sidecar 已启动: http://127.0.0.1:${port}/`);
+  }
+
+  const kimiBin = process.env.KIMI_BIN || "kimi";
+  const kimiChild = spawn(kimiBin, ["web", ...process.argv.slice(2)], {
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+
+  kimiChild.on("error", (err) => {
+    if (err.code === "ENOENT") {
+      console.error("[kimi-web-renamer] 找不到 kimi 可执行文件，请确认 Kimi Code 已安装并加入 PATH");
+    } else {
+      console.error(`[kimi-web-renamer] 启动 kimi web 失败: ${err.message}`);
+    }
+    cleanup();
+    process.exit(1);
+  });
+
+  kimiChild.on("exit", (code, signal) => {
+    cleanup();
+    if (signal) process.exit(1);
+    process.exit(code ?? 0);
+  });
+}
+
+main().catch((err) => {
+  console.error(`[kimi-web-renamer] 运行失败: ${err.message || err}`);
+  process.exit(1);
+});

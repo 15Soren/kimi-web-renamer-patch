@@ -40,6 +40,13 @@ function listCacheRoots() {
     ? override.split(path.delimiter).filter(Boolean)
     : [path.join(os.homedir(), ".cache", "kimi-code", "web")];
 
+  if (!override && process.platform === "win32" && process.env.LOCALAPPDATA) {
+    roots.push(
+      path.join(process.env.LOCALAPPDATA, "kimi-code", "web"),
+      path.join(process.env.LOCALAPPDATA, "kimi-code", "Cache", "web")
+    );
+  }
+
   if (process.env.KIMI_RENAMER_ALL_USERS === "1") {
     let passwd = "";
     try {

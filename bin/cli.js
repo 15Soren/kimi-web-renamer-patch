@@ -295,13 +295,17 @@ function printPatchSuccess(result) {
   console.log(`   - 接口 Endpoint: ${modelInfo.endpoint}`);
 
   if (result.mode === "standalone") {
+    const wrapperHint =
+      process.platform === "win32" ? "bin\\kimi-web-renamer.cmd" : "./bin/kimi-web-renamer";
+    const daemonHint =
+      process.platform === "win32" ? "bin\\install-daemon.cmd" : "./bin/install-daemon";
     console.log("\n🛰️  单文件模式 Sidecar 信息:");
     console.log(`   - 前端目录     : ${result.webDir}`);
     console.log(`   - sidecar 配置 : ${result.serverConfigPath}`);
     console.log(`   - sidecar 地址 : http://127.0.0.1:${result.port}/`);
     console.log("\n📌 接下来:");
-    console.log("   1. 启动 sidecar: node bin/cli.js serve（或运行 ./bin/kimi-web-renamer 同时启动）");
-    console.log("   2. 如需常驻自动守护（防止 kimi web 启动时校验覆盖 index.html），运行 ./bin/install-daemon");
+    console.log(`   1. 启动 sidecar: node bin/cli.js serve（或运行 ${wrapperHint} 同时启动）`);
+    console.log(`   2. 如需常驻自动守护（防止 kimi web 启动时校验覆盖 index.html），运行 ${daemonHint}`);
     console.log("   3. 刷新页面后，在会话标题栏点击重命名图标。\n");
   } else {
     console.log("\n📌 接下来:");

@@ -43,8 +43,11 @@ const RELEASE_SPECS = {
     files: [
       "bin/cli.js",
       "bin/kimi-web-renamer",
+      "bin/kimi-web-renamer.cmd",
       "bin/install-daemon",
+      "bin/install-daemon.cmd",
       "bin/uninstall-daemon",
+      "bin/uninstall-daemon.cmd",
       "src/patcher.js",
       "src/kimi-config.js",
       "src/paths.js",
